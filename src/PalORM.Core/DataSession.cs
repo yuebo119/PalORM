@@ -1477,6 +1477,41 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         }
     }
 
+    // ── FLT4-3/4（2026-11-09）：执行叶子的判死包装 ──
+    // 批量（DataSession_Bulk）与裸连接族（QueryPipeline/SessionBatch/CompiledQuery）此前
+    // 直接 await ExecuteNonQueryAsync/ExecuteReaderAsync/ExecuteScalarAsync，异步异常不进
+    // 任何 catch → 判死标记从不置位，外部关连接后这些路径不会自愈。统一走包装方法，
+    // 命中 IsConnectionFailure 即置位（MarkConnectionPoisoned 内置过滤，不误伤其他异常）。
+    internal async ValueTask<int> ExecuteRowsWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<DbDataReader> ExecuteReaderWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<object?> ExecuteScalarWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteScalarAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<int> ExecuteBatchWithPoisonAsync(DbBatch batch, CancellationToken ct)
+    {
+        try { return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<DbDataReader> ExecuteBatchReaderWithPoisonAsync(DbBatch batch, CancellationToken ct)
+    {
+        try { return await batch.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
     /// 标记为"下次会话初始化需复位"（SQLite 实现只重设 foreign_keys；网络驱动默认 no-op）。
     /// 2026-10-22 终审 P1-8：会话层同时置脏标记，池化租出时对 PG/MySQL 执行方言复位。

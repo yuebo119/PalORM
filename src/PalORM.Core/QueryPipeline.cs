@@ -220,7 +220,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         // 到物化完成计为该项 Elapsed（首项含批派发，后续项含前一结果集读完后服务端
         // 执行本语句的时间）。旧实现整批共用一个起点，OnAfter 报的是批累计。
         long? firstStart = _items[0].Interceptors.Count > 0 ? Stopwatch.GetTimestamp() : null;
-        await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using DbDataReader reader = await _session.ExecuteBatchReaderWithPoisonAsync(batch, ct).ConfigureAwait(false);
         for (int index = 0; index < _items.Count; index++)
         {
             PipelineItem item = _items[index];
@@ -255,7 +255,7 @@ public sealed class QueryPipeline<TProvider> : IDisposable
                 command.Parameters.Add(parameter);
             QueryBuilderExtensions.NotifyInterceptorsOnBefore(item.Interceptors, item.Context);
             await using DbDataReader reader =
-                await DataSession<TProvider>.ExecuteReaderAsync(command, ct).ConfigureAwait(false);
+                await _session.ExecuteReaderWithPoisonAsync(command, ct).ConfigureAwait(false);
             PipelineMaterialization materialization =
                 await item.MaterializeAsync(reader, ct).ConfigureAwait(false);
             _results[index] = materialization.Payload;

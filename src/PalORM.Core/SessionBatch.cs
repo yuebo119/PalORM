@@ -124,7 +124,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
                     AddParameters(command.Parameters, values);
                     batch.BatchCommands.Add(command);
                 }
-                return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                return await _session.ExecuteBatchWithPoisonAsync(batch, ct).ConfigureAwait(false);
             }
             finally
             {
@@ -168,7 +168,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
         mergedCmd.Transaction = transaction;
         mergedCmd.CommandTimeout = _session.BatchCommandTimeoutSeconds;
         mergedCmd.CommandText = mergedSql.ToString();
-        return await mergedCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await _session.ExecuteRowsWithPoisonAsync(mergedCmd, ct).ConfigureAwait(false);
     }
 
     /// <summary>回退：顺序执行（语句顺序 = 追加顺序，行为与分别 ExecuteAsync 等价）。
@@ -205,7 +205,7 @@ public sealed class SessionBatch<TProvider> : IDisposable
                     // 非 SQLite 走逐条新建命令（cmd 每条新实例，无复用面）
                     cmd.Parameters.Clear();
                     AddParameters(cmd.Parameters, values);
-                    total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    total += await _session.ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
                 }
                 finally
                 {

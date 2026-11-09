@@ -50,8 +50,12 @@ public partial class DataSession<TProvider>
             _ = BulkOperationFramework.EnsureInsertMetadata(typeof(T));
             return 0;
         }
-        return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
-            _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
+        try
+        {
+            return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
+                _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
+        }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }  // FLT4-3
     }
 
     /// <summary>批量插入并回填自增主键（RETURNING 方言专用）。
@@ -293,7 +297,7 @@ public partial class DataSession<TProvider>
                     $"Provider '{TProvider.Name}' returned a null array parameter for element type "
                     + $"'{typeof(TKey).Name}' (batch length {batchLen}); the capability probe and the "
                     + "execution path disagree.")).Value;
-            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
         return total;
     }
@@ -355,7 +359,7 @@ public partial class DataSession<TProvider>
         {
             int batchLen = Math.Min(batchSize, keys.Count - start);
             idsParameter.Value = BuildArrayParameter<T>(buildKeyArray, keys, start, batchLen).Value;
-            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
         return total;
     }
@@ -408,7 +412,7 @@ public partial class DataSession<TProvider>
                     // 后续满批：参数实例不变，只写 Value（见方法级 R-UNNESTB 说明）
                     WriteInFormValues<T>(scratch, keyBinding, cmd, keys, start, batchSize);
                 }
-                total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             }
         }
 
@@ -421,7 +425,7 @@ public partial class DataSession<TProvider>
             tail.CommandText = BuildBulkDeleteSql(tailLen, identifiers, isSoftDelete);
             BindInFormParameters<T>(tail, scratch, keyBinding.Build, keys, start, tailLen);
             BindDefaultFilterParameters<T>(tail);
-            total += await tail.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            total += await ExecuteRowsWithPoisonAsync(tail, ct).ConfigureAwait(false);
         }
         return total;
     }
@@ -482,7 +486,7 @@ public partial class DataSession<TProvider>
             //（不辨作用域），与既有 BindRowValuesViaProbeAsync 的 probe 载体重名会误伤其断言
             await using DbCommand engineProbe = CreateCommand();
             engineProbe.CommandText = "SELECT 1 WHERE 1 IN (SELECT value FROM json_each('[1]'))";
-            await engineProbe.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            await ExecuteScalarWithPoisonAsync(engineProbe, ct).ConfigureAwait(false);
             CacheJsonEachSupport<T>(true);
             return true;
         }
@@ -531,7 +535,7 @@ public partial class DataSession<TProvider>
         {
             int batchLen = Math.Min(UnnestArraysMaxRowsPerBatch, keys.Count - start);
             idsParameter.Value = BuildJsonKeyArrayText(keys, start, batchLen, convertKey, typeof(T).Name);
-            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
 
         return total;
@@ -1128,7 +1132,7 @@ public partial class DataSession<TProvider>
             // 只写 Value——零 CreateParameter（P0-1 的核心）
             valuesBinder(pool, entities[i], 0);
 
-            int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
 
             if (metadata.IncrementVersion is { } incrementVersion)
             {
@@ -1210,7 +1214,7 @@ public partial class DataSession<TProvider>
                 batch.BatchCommands.Add(batchCommand);
             }
 
-            int affectedRows = await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            int affectedRows = await ExecuteBatchWithPoisonAsync(batch, ct).ConfigureAwait(false);
             total += affectedRows;
 
             // 批总和判定 + 延迟回填登记（见方法 summary 与乐观锁语义说明）
@@ -1510,7 +1514,7 @@ public partial class DataSession<TProvider>
                     metadata, pool, entities, start, end, paramsPerRow).ConfigureAwait(false);
             }
 
-            totalAffected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            totalAffected += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
 
         return totalAffected;
@@ -1639,7 +1643,7 @@ public partial class DataSession<TProvider>
                         + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
                         + "the capability probe and the execution path disagree.")).Value;
             }
-            totalAffected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            totalAffected += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
         return totalAffected;
     }
@@ -1819,7 +1823,7 @@ public partial class DataSession<TProvider>
                     + $"the concurrency token (element type '{versionElementType.Name}', "
                     + $"batch length {batchLen}); the capability probe and the execution path disagree.")).Value;
 
-            int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             totalAffected += affectedRows;
             VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
         }
@@ -1890,7 +1894,7 @@ public partial class DataSession<TProvider>
                 bindVersionValue(pool, entities[i], offset + setColumnCount + 1);
             }
 
-            int affectedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             totalAffected += affectedRows;
             VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
         }
@@ -1928,7 +1932,7 @@ public partial class DataSession<TProvider>
                     await using DbCommand cmd = CreateCommand();
                     cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
                     cmd.CommandText = "SELECT VERSION()";
-                    object? scalar = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+                    object? scalar = await ExecuteScalarWithPoisonAsync(cmd, token).ConfigureAwait(false);
                     bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
                     return new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
                         supportsValuesRow
@@ -2276,7 +2280,7 @@ public partial class DataSession<TProvider>
 
                 try
                 {
-                    await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                    await using DbDataReader reader = await ExecuteReaderWithPoisonAsync(cmd, ct).ConfigureAwait(false);
                     int returned = 0;
                     List<long>? returnedIds = backfill is null ? null : new List<long>(rowCount);
                     while (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -2535,7 +2539,7 @@ public partial class DataSession<TProvider>
                 lastRowCount = rowCount;
             }
             cmd.CommandText = lastSql;
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             processed += rowCount;
         }
         return processed;
@@ -2595,7 +2599,7 @@ public partial class DataSession<TProvider>
                 BindUpsertRowViaScratch(scratch!, metadata, entity, pool, 0, columnCount);
             }
 
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             processed++;
         }
 
@@ -2761,7 +2765,7 @@ public partial class DataSession<TProvider>
                         + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
                         + "the capability probe and the execution path disagree.")).Value;
             }
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             processed += batchLen;
         }
         return processed;

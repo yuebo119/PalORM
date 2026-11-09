@@ -83,4 +83,26 @@ public sealed class BulkFaultTests
         await Assert.That(await session.ScalarAsync<long>($"SELECT COUNT(*) FROM fault_row")).IsEqualTo(6);
         await Assert.That(created.Wrapper.State).IsEqualTo(System.Data.ConnectionState.Open);
     }
+
+    /// <summary>FLT4-3 锁定（2026-11-09）：批量执行点此前裸调 ExecuteNonQueryAsync，
+    /// 异步判死异常不进任何 catch → 判死标记从不置位。本用例注入真实形态的判死异常
+    /// （驱动消息），断言后续操作触发重建：撤掉包装方法即红（不重建 → 第二次写仍走 wrapper）。</summary>
+    [Test]
+    public async Task BulkInsert_ConnectionPoisoning_RebuildsConnection()
+    {
+        var boom = new InvalidOperationException("ExecuteNonQuery can only be called when the connection is open.");
+        var created = await FaultInjectionFixtures.CreateAsync(
+            keeper => new FaultyConnection(keeper).FailOnCommand(1, boom));
+        await using DataSession<SqliteProvider> session = created.Session;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.BulkInsertAsync(FaultInjectionFixtures.Rows(10), batchSize: 3));
+
+        // 判死标记置位 → 下次建命令前重建（新连接不经 wrapper）
+        var row = FaultInjectionFixtures.Row("after", 1);
+        await session.InsertAsync(row);
+        await Assert.That(row.Id).IsGreaterThan(0L);
+        await Assert.That(created.Wrapper.CommandsCreated).IsEqualTo(1)
+            .Because("判死标记应触发重建，重建出的新连接不经 wrapper；未置位则第二次写仍走 wrapper 旧连接");
+    }
 }

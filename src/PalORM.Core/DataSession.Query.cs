@@ -422,7 +422,8 @@ public sealed partial class DataSession<TProvider>
         return new StoredProcBuilder(
             _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
             _operationState, _options.ValidateQueryColumnOrder,
-            syncIo: TProvider.PreferSynchronousIo, syncRowRead: PreferSynchronousRowRead);
+            syncIo: TProvider.PreferSynchronousIo, syncRowRead: PreferSynchronousRowRead,
+            connectionFailureHandler: MarkConnectionPoisoned);
     }
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。

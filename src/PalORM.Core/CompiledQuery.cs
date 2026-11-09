@@ -100,7 +100,7 @@ public sealed class CompiledQuery<T, TProvider> : IDisposable
         }
 
         await using DbDataReader reader =
-            await DataSession<TProvider>.ExecuteReaderAsync(command, ct).ConfigureAwait(false);
+            await _session.ExecuteReaderWithPoisonAsync(command, ct).ConfigureAwait(false);
         List<T> list = await ResultListReader.ReadAllAsync(
             reader, DataSession<TProvider>.GetRowFactory<T>(), _session.CompiledCapacity<T>(), ct,
             syncRead: _session.CompiledSyncRowRead).ConfigureAwait(false);
