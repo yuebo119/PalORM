@@ -95,17 +95,17 @@ What matters for AOT is how each library replaces runtime reflection: **compile-
 | Group | Wins /87 | Median latency ratio | Median memory ratio |
 |---|---:|---:|---:|
 | ADO | — | 1.00 | 1.00 |
-| PalORM | 51 | 1.01 | 1.00 |
-| Dapper.AOT | 11 | 1.08 | 1.15 |
-| RepoDb | 6 | 1.14 | 1.46 |
-| EF Core | 8 | 3.00 | 8.04 |
-| Dapper | 8 | 1.08 | 1.61 |
-| FreeSql | 2 | 1.43 | 2.01 |
-| linq2db | 1 | 1.40 | 3.02 |
-| SqlSugar | 0 | 2.18 | 3.52 |
+| PalORM | 22 | 1.01 | 1.00 |
+| Dapper.AOT | 11 | 1.07 | 1.15 |
+| RepoDb | 2 | 1.15 | 1.47 |
+| EF Core | 8 | 2.95 | 8.05 |
+| Dapper | 6 | 1.10 | 1.62 |
+| FreeSql | 0 | 1.45 | 2.00 |
+| linq2db | 0 | 1.40 | 3.02 |
+| SqlSugar | 1 | 2.25 | 3.52 |
 
-- **PalORM**: wins 51/87 (59%), median latency ratio **1.01** (full range 0.46 ~ 1.16), median memory ratio **1.00**, no cell at 1.5x or worse.
-- **Largest outliers**: SqlSugar UpsertBatch (SQLite 107.5x, MySQL 35.8x) and EF Core single-row Insert (66.5 ~ 67.2x, the per-operation DbContext shape).
+- **PalORM**: wins 22/87 (25%), median latency ratio **1.01** (full range 0.41 ~ 1.14), median memory ratio **1.00**, no cell at 1.5x or worse.
+- **Largest outliers**: SqlSugar UpsertBatch (SQLite 109.2x, 101.0x) and EF Core single-row Insert (65.9 ~ 67.2x, the per-operation DbContext shape).
 
 ### Operation comparison (latency [ratio] and memory [relative to baseline]; colors follow the six percentage bands via MathJax)
 
