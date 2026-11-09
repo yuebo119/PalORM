@@ -85,4 +85,16 @@ public sealed class CommandTimeoutNormalizerTests
         await Assert.That(async () => await CommandTimeoutNormalizer.RunAsync(failed, 0L, 1))
             .Throws<InvalidOperationException>();
     }
+
+    /// <summary>L1 锁定（c0409c3）：归一化的 TimeoutException 必须打 PalORM.InfrastructureTimeout
+    /// 标记，调用方据此归入熔断。撤掉 Data[...] = true 即红。</summary>
+    [Test]
+    public async Task NormalizedTimeout_CarriesInfrastructureMarker()
+    {
+        long start = TimestampAgo(TimeSpan.FromSeconds(2));
+        Task<int> failed = Task.FromException<int>(new InvalidOperationException("driver interrupt"));
+        TimeoutException? ex = await Assert.ThrowsAsync<TimeoutException>(
+            async () => await CommandTimeoutNormalizer.RunAsync(failed, start, 1));
+        await Assert.That(ex!.Data["PalORM.InfrastructureTimeout"] is true).IsTrue();
+    }
 }
