@@ -15,7 +15,7 @@ EF Core 社区 2025 年用 **SourceGen Interceptors**（.NET 8+ 特性）实现�
 ### 设计要点
 
 1. **opt-in 开关**：消费侧 csproj 设 `<PalORMAutoTagging>true</PalORMAutoTagging>` 启用。默认关闭——不影响现有行为
-2. **6 个终态方法**：`ToListAsync` / `FirstAsync` / `FirstOrDefaultAsync` / `SingleAsync` / `SingleOrDefaultAsync` / `ExecuteNonQueryAsync`
+2. **9 个终态方法**：`ToListAsync` / `FirstAsync` / `FirstOrDefaultAsync` / `SingleAsync` / `SingleOrDefaultAsync` / `ExecuteNonQueryAsync` / `ForEachAsync` / `ToPageAsync` / `QueryMultipleAsync`（ITM-818 补齐后三个，与 `AutoTaggingEmitter.s_terminals` 一致）
 3. **路径规范化**：编译机绝对路径 → 相对工作目录（避免泄露目录结构到 DB 日志）；fallback 仅文件名
 4. **AOT 全兼容**：Interceptors 是编译期机制，运行时零反射；net11 AOT publish 0 警告实测通过
 

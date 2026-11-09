@@ -17,6 +17,22 @@ permissions:
   contents: read
 
 jobs:
+  # ── CLOSE-2：CI 健康检查（周度）─────────────────────────────
+  # 检查最近 7 天各工作流结论，红即打印告警（非 strict：报告用，不阻塞 nightly）。
+  ci-health:
+    name: CI Health Check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Check CI health (last 7 days)
+        run: dotnet run --file scripts/ci-health-check.cs -- --days 7
+
   # ── COMPAT-1：MySQL 版本 lane ───────────────────────────────
   # 断言形态与结果两轴：8.0.18 必须回退 CASE WHEN；8.0.19 / 8.4 必须走 JOIN (VALUES ROW)。
   mysql-version-lane:
