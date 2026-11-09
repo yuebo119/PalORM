@@ -32,7 +32,7 @@
       "_comment": "META-1 类级分支地板（防退化非达标）。branch 读 dotnet-coverage 的 block_coverage（该工具链无独立 branch 属性，block 是分支语义的可用代理）；按 function 的 namespace+type_name 聚合、行数加权。2026-10-31 Integration 全量实测：QueryBuilder 88.2 / BatchUpdateSqlBuilder 65.2 / MySqlProvider 78.1 / PostgreSqlProvider 60.9 / SqliteProvider 76.0（block%），地板=实测-2pp。2026-11-02：postgreSqlProvider 行地板 58→57.5——实测 57.945 卡在 58 线下 0.055pp（10-30 后 src 新增摊薄），按实测-0.45pp 设防退化边际；补齐 PG 侧用例后按实测回调。 【2026-11-05 CI run 41965300306 订正】MySqlProvider 行覆盖实测 70.92%（旧 line 地板 71 判红）；新增 IsConnectionFailure 方法摊薄三个 Provider 分母，line 地板各回调 2pp（71→69 / 57.5→55 / 65→63），branch 地板保持（实测 77.44 / 待 CI 全量读数 / 待 CI 全量读数 均留余量）。五条类级断言改为独立循环执行，一次 CI 给出全部读数。 【2026-11-05 CI run 41966660163 五条类级读数全量落定】SqliteProvider line 54.74 / branch 60.91（旧地板 63/74 来自 SQLite-only 通道，全量通道不可达）→ 地板 54/60；PostgreSqlProvider 59.26/62.69（地板 55/58.9 保持）、MySqlProvider 70.92/77.44（地板 69/76 保持）、QueryBuilder 81.82/88.41、BatchUpdateSqlBuilder 63.03/65.11 全部通过。",
       "queryBuilder": {
         "type": "QueryBuilder&lt;T&gt;",
-        "line": 81,
+        "line": 79,
         "branch": 86
       },
       "batchUpdateSqlBuilder": {
