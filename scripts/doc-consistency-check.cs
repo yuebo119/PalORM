@@ -6,6 +6,7 @@
 // --fix：D10 三处计数自动同步（ITM-735 的 awk 精确重写语义保真——只替换含 [Test]+声明+计数的行）。
 // 契约：0=全过；1=有 FAIL；--fix 模式 0=同步完成；stdout 与 .sh 版对拍兼容（含 ANSI 色码）。
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 Console.OutputEncoding = new UTF8Encoding(false);
@@ -432,6 +433,91 @@ else
         Pass($"D16 README 性能表二与 {perfTemplatePath} 逐值一致（{perfChecked} 个倍数）");
     else
         Fail($"D16 README 性能表二与模板不一致（{string.Join("；", perfBad.Take(8))}）——按模板重生成或同步模板");
+}
+
+// ── D16b: README 胜场数与 crossbench 批次实测对账（2026-11-09 新增）──
+// 动因：README.en 的「胜场 51/87」与中文「22/87」同批 87 格必有一错（实测 22），
+// 且 RepoDb/Dapper/FreeSql/linq2db/SqlSugar 各行与离群值整体漂移——手写数字无机械校验。
+// 判据：取 bench/crossbench/results/ 下最新批次 JSON，按 (方言, 操作, 档) 聚合两遍反序平均，
+// 每格取 MedianNs 最低者为胜者，统计各组胜场，与两份 README 的「胜场 /87」行逐组对账。
+// 未跑横评（无批次文件）时跳过，不判红。
+var crossbenchDir = "bench/crossbench/results";
+var winBad = new List<string>();
+var winChecked = 0;
+var latestBatch = Directory.Exists(crossbenchDir)
+    ? Directory.GetFiles(crossbenchDir, "crossbench-*.json").OrderByDescending(f => f, StringComparer.Ordinal).FirstOrDefault()
+    : null;
+if (latestBatch is null)
+{
+    Console.WriteLine($"  D16b 跳过：未找到 {crossbenchDir}/crossbench-*.json");
+}
+else
+{
+    var nameMap = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["ADO_NET"] = "ADO", ["PalORM"] = "PalORM", ["DapperAot"] = "Dapper.AOT",
+        ["EfCore"] = "EF Core", ["Dapper"] = "Dapper", ["RepoDb"] = "RepoDb",
+        ["SqlSugar"] = "SqlSugar", ["FreeSql"] = "FreeSql", ["Linq2Db"] = "linq2db",
+    };
+    var sums = new Dictionary<string, (double Sum, int Count)>(StringComparer.Ordinal);
+    using (var doc = JsonDocument.Parse(File.ReadAllText(latestBatch)))
+    {
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            string key = string.Concat(e.GetProperty("Dialect").GetString(), "|",
+                e.GetProperty("Operation").GetString(), "|", e.GetProperty("Rows").GetInt32(), "|",
+                e.GetProperty("Implementation").GetString());
+            double ns = e.GetProperty("MedianNs").GetDouble();
+            sums[key] = sums.TryGetValue(key, out var s) ? (s.Sum + ns, s.Count + 1) : (ns, 1);
+        }
+    }
+    var best = new Dictionary<string, (double Ns, string Impl)>(StringComparer.Ordinal);
+    foreach (var kv in sums)
+    {
+        string[] parts = kv.Key.Split('|');
+        string cell = string.Concat(parts[0], "|", parts[1], "|", parts[2]);
+        double avg = kv.Value.Sum / kv.Value.Count;
+        if (!best.TryGetValue(cell, out var b) || avg < b.Ns) best[cell] = (avg, parts[3]);
+    }
+    var wins = new Dictionary<string, int>(StringComparer.Ordinal);
+    foreach (var kv in best)
+    {
+        string impl = kv.Value.Impl;
+        wins[impl] = wins.TryGetValue(impl, out var n) ? n + 1 : 1;
+    }
+    var readmeWins = new Dictionary<string, int>(StringComparer.Ordinal);
+    foreach (string file in new[] { "README.md", "README.en.md" })
+    {
+        if (!File.Exists(file)) continue;
+        foreach (string line in File.ReadLines(file))
+        {
+            if (!line.StartsWith('|')) continue;
+            string[] cells = line.Split('|');
+            if (cells.Length < 3) continue;
+            string group = cells[1].Trim();
+            if (!nameMap.ContainsValue(group)) continue;
+            if (!int.TryParse(cells[2].Trim(), out int w)) continue;
+            string key = file + "|" + group;
+            if (readmeWins.TryGetValue(key, out var prev) && prev != w)
+                winBad.Add($"{file} 组 {group} 胜场行出现两个值 {prev}/{w}");
+            readmeWins[key] = w;
+        }
+    }
+    foreach (var kv in readmeWins)
+    {
+        string[] p = kv.Key.Split('|');
+        string impl = nameMap.FirstOrDefault(x => x.Value == p[1]).Key ?? p[1];
+        int actual = wins.TryGetValue(impl, out var n) ? n : 0;
+        if (kv.Value != actual)
+            winBad.Add($"{p[0]} {p[1]} 声明 {kv.Value}/87 ≠ 实测 {actual}/87（批次 {Path.GetFileName(latestBatch)}）");
+        winChecked++;
+    }
+    if (winBad.Count == 0 && winChecked == 0)
+        Fail("D16b 未解析到任何胜场行——0 项核对等于门禁失效");
+    else if (winBad.Count == 0)
+        Pass($"D16b README 胜场与 crossbench 批次实测一致（{winChecked} 组 / {best.Count} 格，{Path.GetFileName(latestBatch)}）");
+    else
+        Fail($"D16b README 胜场与实测不一致（{string.Join("；", winBad.Take(8))}）");
 }
 
 // ── D17: 诊断计数声明 = SourceGen 实际描述符（2026-10-31 新增）──
