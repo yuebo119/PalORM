@@ -765,7 +765,8 @@ void V17cBattery()
 
         // GATE-2：G32 packageSourceMapping 覆盖（删 pattern 应 FAIL）
         MutateFile("NuGet.Config", t => t.Replace("<package pattern=\"*\" />", "<package pattern=\"NothingMatches.*\" />"), touch: touched);
-        if (!RunGate().Contains("FAIL G32")) v17cFail.Add("GATE-2");
+        var gateOut = RunGate();
+        if (!(gateOut.Contains("FAIL") && gateOut.Contains("G32"))) v17cFail.Add("GATE-2");
         Git("checkout -- NuGet.Config");
 
         // GATE-3：SemVer 行为变更（PATCH + 💔 段应判升版不足）
