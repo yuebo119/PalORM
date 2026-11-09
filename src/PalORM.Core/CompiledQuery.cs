@@ -100,7 +100,7 @@ public sealed class CompiledQuery<T, TProvider> : IDisposable
         }
 
         await using DbDataReader reader =
-            await DataSession<TProvider>.ExecuteReaderAsync(command, ct).ConfigureAwait(false);
+            await _session.ExecuteReaderWithPoisonAsync(command, ct).ConfigureAwait(false);
         List<T> list = await ResultListReader.ReadAllAsync(
             reader, DataSession<TProvider>.GetRowFactory<T>(), _session.CompiledCapacity<T>(), ct,
             syncRead: _session.CompiledSyncRowRead).ConfigureAwait(false);
@@ -111,7 +111,14 @@ public sealed class CompiledQuery<T, TProvider> : IDisposable
     private DbCommand EnsureCommand()
     {
         if (_command is not null)
-            return _command;
+        {
+            // C1：连接重建后旧命令绑定在已释放的连接上，必须失效重建
+            if (ReferenceEquals(_command.Connection, _session.BatchConnection))
+                return _command;
+            _command.Dispose();
+            _command = null;
+            _parameters = null;
+        }
 
         DbCommand command = _session.CreateCompiledCommand();
         command.CommandText = _sql;

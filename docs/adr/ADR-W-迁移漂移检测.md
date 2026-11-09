@@ -71,6 +71,18 @@ SQLite 仍复用 `ConfigureSchemaCommand`，保留单一真源；这也是为什
 - `MigrationResult` 与 `DbOptions` 各新增一个成员，均向后兼容（SemVer MINOR）；
 - 未解决：只检列集合，不检列类型、多余列与索引缺失，留作后续议题。
 
+## 权限要求（2026-11-08 补）
+
+PostgreSQL/MySQL 的 `information_schema.COLUMNS` 只返回当前数据库用户**有权限**读到的列
+（MySQL 官方文档明确此行为；PostgreSQL 同样按当前用户可访问性过滤）。最小权限部署里，
+若迁移账号不是表所有者，查询结果会缺列，被漂移检测判为"列不存在"而误报。
+
+处置：
+
+- 部署时迁移账号需具备 `information_schema` 读权限（或表所有者）；
+- 权限不足时检出项不可信，可显式关闭 `DbOptions.ValidateMigrationDrift` 规避；
+- 读失败（权限/连接异常）已按 ADR-W 语义记 `Validation failed` 而不抛异常（H1，2026-11-08）。
+
 ## 修订记录
 
 - 初稿（同日）：默认关闭 + 逐表查询，理由是避免启动路径 N 次往返；

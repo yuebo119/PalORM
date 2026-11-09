@@ -629,8 +629,12 @@ void V17Batteries()
         Git("checkout -- src/PalORM.Core/DataSession_Bulk.cs");
 
         mutFiles.Add("NuGet.Config");
-        MutateFile("NuGet.Config", t => Regex.Replace(t, @"^  <packageSourceMapping>\r?$", "  <packageSourceMapping>\n    <packageSource key=\"dotnet-tools\">\n      <package pattern=\"Microsoft.CodeAnalysis.*\" />\n    </packageSource>", RegexOptions.Multiline));
-        if (!RunGate().Contains("限制 Microsoft.CodeAnalysis")) missing.Add("G32");
+        // G32 判据 2026-11-09 重写（覆盖完整性）：原探针注入"限制 Microsoft.CodeAnalysis 只从
+        // dotnet-tools 取"的旧形态，新判据不检查该字样（nuget.org 的 * 仍覆盖全部包 → PASS）。
+        // 改注入新判据的失效形态：删 nuget.org 的 * pattern → 包未被覆盖。
+        MutateFile("NuGet.Config", t => t.Replace("<package pattern=\"*\" />", "<package pattern=\"NothingMatches.*\" />"));
+        var gateG32 = RunGate();
+        if (!(gateG32.Contains("FAIL") && gateG32.Contains("G32"))) missing.Add("G32");
         Git("checkout -- NuGet.Config");
 
         // C 段：G33 脏树
@@ -678,6 +682,8 @@ void V17cBattery()
         return output;
     }
     string RunDc() { return RunCapture("dotnet", "run --file scripts/doc-consistency-check.cs"); }
+    string RunGate() { return RunCapture("dotnet", "run --file scripts/gate-check.cs -- --allow-dirty"); }
+    string RunSemver() { return RunCapture("dotnet", "run --file scripts/semver-bump-check.cs -- 6.8.1 --prev 6.8.0 --allow-missing-baseline"); }
     var touched = new List<string>();
     try
     {
@@ -753,6 +759,27 @@ void V17cBattery()
         // 证明 D14 对账真的能抓到文档与 test-gate 的级别不一致（第二轮审计的实弹场景）
         MutateFile(".ai/test/prompt.md", t => new Regex(@"(\| T6 \|[^\n]*\| )阻断( \|)").Replace(t, "$1警告$2", 1));
         if (!RunDc().Contains("FAIL D14")) v17cFail.Add("D14");
+        GitInAi("checkout -- test/prompt.md");
+
+        // ── GATE-5 探针（2026-11-09）：GATE-1~4 修复的判据变异验证 ──
+        // GATE-1：D10 写死计数守卫（正则补反斜杠后应命中"当前 NNN 项"）
+        MutateFile(".ai/test/prompt.md", t => t + "\n当前 9999 项 [Test] 声明\n");
+        if (!RunDc().Contains("FAIL D10")) v17cFail.Add("GATE-1");
+        GitInAi("checkout -- test/prompt.md");
+
+        // GATE-2：G32 packageSourceMapping 覆盖（删 pattern 应 FAIL）
+        MutateFile("NuGet.Config", t => t.Replace("<package pattern=\"*\" />", "<package pattern=\"NothingMatches.*\" />"), touch: touched);
+        var gateOut = RunGate();
+        if (!(gateOut.Contains("FAIL") && gateOut.Contains("G32"))) v17cFail.Add("GATE-2");
+        Git("checkout -- NuGet.Config");
+
+        // GATE-3：SemVer 行为变更（PATCH + 💔 段应判升版不足）
+        var semverOut = RunSemver();
+        if (!semverOut.Contains("升版类型不足") && !semverOut.Contains("::error::")) v17cFail.Add("GATE-3");
+
+        // GATE-4：D14 零项（.ai 在但无 T 条目应 FAIL）
+        MutateFile(".ai/test/prompt.md", t => new Regex(@"\| (T\d+) \|").Replace(t, "| X0 |"));
+        if (!RunDc().Contains("FAIL D14")) v17cFail.Add("GATE-4");
         GitInAi("checkout -- test/prompt.md");
 
         // D11：生成物工具版本漂移。2026-11-04 修正：ToolVersion 已改为引用生成常量

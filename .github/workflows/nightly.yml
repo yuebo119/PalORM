@@ -17,6 +17,22 @@ permissions:
   contents: read
 
 jobs:
+  # ── CLOSE-2：CI 健康检查（周度）─────────────────────────────
+  # 检查最近 7 天各工作流结论，红即打印告警（非 strict：报告用，不阻塞 nightly）。
+  ci-health:
+    name: CI Health Check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Check CI health (last 7 days)
+        run: dotnet run --file scripts/ci-health-check.cs -- --days 7
+
   # ── COMPAT-1：MySQL 版本 lane ───────────────────────────────
   # 断言形态与结果两轴：8.0.18 必须回退 CASE WHEN；8.0.19 / 8.4 必须走 JOIN (VALUES ROW)。
   mysql-version-lane:
@@ -184,12 +200,42 @@ jobs:
     name: Mutation replay and discrimination score (shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # 真库规则（TimeKindMatrix PG 用例、BulkInsertReturning PG/MySQL 用例）需要容器，
+    # 否则基线检查连不上库而红（2026-11-07 nightly 失败根因）
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: palorm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d palorm"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: palorm
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries 30
     # 分片：单进程全量实测 456.9 秒（2026-11-04，68 条 × 一次构建一次测试 4.7 秒），
     # 超出 5 分钟预算；两片各自 checkout、互不争用 bin/obj，单片约 3.8 分钟。
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
+    env:
+      PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
+      PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
     steps:
       - uses: actions/checkout@v7
         with:

@@ -16,7 +16,7 @@
 
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
-| **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
+| **最高** | `.editorconfig` | SonarAnalyzer 39 条 dotnet_diagnostic（19 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
 | **高** | `.ai/lessons.md` | 规范系统手册 v7.45（217 缺陷：A1-A7 + B1-B210 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
 | **高** | `.ai/perf-ledger.md` | 性能决策账本（EPSL §4.4 三表：已用/不做/勿重开；立项前必查勿重开表，B182） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.3（24 铁律 + 19 缺陷，本地工具，不入仓库） |
@@ -34,7 +34,7 @@
 | `/gate` | 门禁 | G1-G33 规范合规检查（编译前阻断） |
 | `/refine` | 精炼 | 24+3 项操作矩阵（更优实现） |
 | `/test` | 测试规范 | T1-T24 测试铁律 + 覆盖矩阵 + 基准配置规范 |
-| （自动） | pre-commit | 提交前八段：`secret-guard` → `stub-check` → 受影响项目构建（`precommit-build-check.cs`：src/test/tools 任一编译面变更即全量 `PalORM.ci.slnf` Debug 增量，根级基础设施文件同，docs/scripts/vendored 子树跳过；2026-10-18 起取消单项目正向映射——反向依赖漏检，实测全量增量仅约 9 秒）→ 参数集合复用门禁（R-UNNESTB）→ `dotnet run --file scripts/verify-ai-system.cs -- --fast`（27 项里的 25 项）→ `dotnet run --file scripts/gate-check.cs -- --allow-dirty`（G1-G33，G10/G15/G16 为警告级）→ `dotnet run --file scripts/doc-consistency-check.cs`（D4/D10-D14 文档口径；`.ai/` 不存在则 verify/gate 两段跳过）→ `dotnet run --file scripts/assert-conformance-contracts.cs`（契约覆盖账本：两个契约目录的 ID 集合、SQLite 豁免数、每条目断言数与 `bench/baselines/conformance-contracts.json` 对账；2026-11-03 增，补「守卫写在测试方法体内、整方法被删即一起消失」的缺口）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
+| （自动） | pre-commit | 提交前十段：SDK 一致性前置校验（bash 层读 `global.json` 钉版 + `dotnet --list-sdks`，先于任何 `dotnet run`——钉版缺失时 `dotnet run` 无法执行，C# 门禁 `scripts/check-sdk.cs` 也就无法被调用；`--self-check` 内嵌好/坏夹具自证判据）→ 锁定测试门禁（`check-locked-tests.cs`：src/ 变更必须伴随 test/ 变更，例外登记 `.ai/src-only-registry.md`）→ `secret-guard` → `stub-check` → 受影响项目构建（`precommit-build-check.cs`：src/test/tools 任一编译面变更即全量 `PalORM.ci.slnf` Debug 增量，根级基础设施文件同，docs/scripts/vendored 子树跳过；2026-10-18 起取消单项目正向映射——反向依赖漏检，实测全量增量仅约 9 秒）→ 参数集合复用门禁（R-UNNESTB）→ `dotnet run --file scripts/verify-ai-system.cs -- --fast`（27 项里的 25 项）→ `dotnet run --file scripts/gate-check.cs -- --allow-dirty`（G1-G33，G10/G15/G16 为警告级）→ `dotnet run --file scripts/doc-consistency-check.cs`（D4/D10-D14 文档口径；`.ai/` 不存在则 verify/gate 两段跳过）→ `dotnet run --file scripts/assert-conformance-contracts.cs`（契约覆盖账本：两个契约目录的 ID 集合、SQLite 豁免数、每条目断言数与 `bench/baselines/conformance-contracts.json` 对账；2026-11-03 增，补「守卫写在测试方法体内、整方法被删即一起消失」的缺口）。**改了 `.ai/*.md` 的计数/标题声明却不改对应校验的配对源，会在这里被拦** |
 
 ### 项目专属经验（v4.0 + v5.0 实测，编号与四系统脚本对齐）
 

@@ -7,11 +7,14 @@ namespace PalORM.Sqlite;
 /// <summary>SQLite Provider —— Microsoft.Data.Sqlite 适配。</summary>
 public sealed class SqliteProvider : IDbProvider
 {
-    /// <summary>连接判死（2026-11-04，FLT-4）：外部关闭连接后 <c>DbConnection.State</c> 可能仍报 Open，
-    /// PalORM 靠这条判定把会话标脏并在下次建命令前重建连接。SQLite 的形态是驱动抛
-    /// <see cref="InvalidOperationException"/>（"Connection is not open"）。</summary>
+    /// <summary>连接判死（2026-11-04，FLT-4；2026-11-09 FLT4-1 修正匹配式）：外部关闭连接后
+    /// <c>DbConnection.State</c> 可能仍报 Open，PalORM 靠这条判定把会话标脏并在下次建命令前重建连接。
+    /// SQLite 的真实形态是 <see cref="InvalidOperationException"/>（"ExecuteNonQuery can only be called
+    /// when the connection is open."，2026-11-09 实测；原精确匹配 "Connection is not open" 从不命中，
+    /// 是死代码）。</summary>
     public static bool IsConnectionFailure(Exception exception)
-        => exception is InvalidOperationException { Message: "Connection is not open" };
+        => exception is InvalidOperationException
+            && exception.Message.Contains("when the connection is open", StringComparison.Ordinal);
 
     /// <summary>C5：SQLitePCL bundle 初始化改走 <see cref="ModuleInitializerAttribute"/>。
     /// <para><b>为什么</b>：显式静态构造器使类型失去 <c>beforefieldinit</c>，CLR 在<b>每次</b>

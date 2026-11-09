@@ -483,6 +483,20 @@ public struct QueryBuilder<T> where T : class, new()
         if (createArray is null || _dialect != SqlDialect.PostgreSql)
             return false;
 
+        // M2'：数组形态只加 1 个参数，但也受绑定参数上限约束（与 AddInClause 同型守卫）
+        int dialectLimit = SqlLimits.MaxBindParametersFor(_dialect);
+        int limitReserve = 0;
+        if (LiteralTakeValue == 0)
+        {
+            if (_take.HasValue) limitReserve = 2;
+            else if (_skip.HasValue) limitReserve = 1;
+        }
+        if (_parameterCount + 1 + limitReserve > dialectLimit)
+            throw new ArgumentException(
+                $"WhereIn received an array value on a builder holding {_parameterCount} parameters; " +
+                $"the total exceeds the {dialectLimit} bind-parameter limit for {_dialect.GetName()}. " +
+                "Use a temp table join or split the query into batches.", nameof(items));
+
         var values = new TValue[items.Count];
         for (int i = 0; i < items.Count; i++)
             values[i] = items[i];
@@ -1217,10 +1231,10 @@ public struct QueryBuilder<T> where T : class, new()
             throw new NotSupportedException(
                 "DELETE does not support Join/OrderBy/Lock/Window/GroupBy/Having clauses; they would be silently dropped. " +
                 "Remove them, or express the filter via Where.");
-        if (_take > 0 || _skip > 0)
+        if (HasIgnoredExecutionModifiers)
             throw new NotSupportedException(
-                "DELETE does not support Take/Skip; the LIMIT would be silently dropped and widen the affected rows. " +
-                "Use Where() to bound the deletion, or BulkDeleteAsync for key lists.");
+                "DELETE does not support Take/Skip/Select/WithCache/AsSplitQuery; they would be silently dropped " +
+                "and widen the affected rows. Use Where() to bound the deletion, or BulkDeleteAsync for key lists.");
         // [SoftDelete] 实体与 DataSession.DeleteAsync 同语义：改写成 UPDATE deleted_at。
         // 默认过滤里的 "deleted_at IS NULL" 天然构成幂等条件（重复删除返回 0 行）。
         bool isSoftDelete = PalORM_Runtime.EntityFeatures.TryGetValue(typeof(T), out EntityFeatures features)
@@ -1245,7 +1259,26 @@ public struct QueryBuilder<T> where T : class, new()
                 sb.Append(_quoteIdentifier(_tableName));
                 sb.Append(' ');
             }
-            AppendWhereSection(ref sb);
+            // M6：软删条件恒保留（与 DeleteAsync 同语义），即使 IgnoreFilters 跳过了默认过滤注入。
+            // 默认过滤缺失时手动补 deleted_at IS NULL，保证幂等（重复删除返回 0 行）。
+            if (isSoftDelete && !HasClause(QueryClauseKind.DefaultFilter))
+            {
+                sb.Append("WHERE ");
+                sb.Append(_quoteIdentifier("deleted_at"));
+                sb.Append(" IS NULL");
+                if (HasClause(QueryClauseKind.Where))
+                {
+                    sb.Append(" AND (");
+                    AppendUserWhereClauses(ref sb);
+                    sb.TrimEnd();
+                    sb.Append(')');
+                }
+                sb.Append(' ');
+            }
+            else
+            {
+                AppendWhereSection(ref sb);
+            }
             AppendClauses(ref sb, QueryClauseKind.Raw);
             sb.TrimEnd(); return sb.ToString();
         }

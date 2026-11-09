@@ -6,8 +6,9 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105，与 global.json SDK
-         11.0.100-rc.2.26504.105 同轨（NuGet 平面索引确认 rc.2 为当前最新 .NET 11 线）。 -->
+    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105（NuGet 平面索引确认 rc.2 为
+         .NET 11 包线最新版）。2026-11-09：global.json SDK 已升 rc.3.26522.148（工具线），
+         包线保持 rc.2——两者分属 NuGet 包与 SDK 两条版本线，无需同轨。 -->
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
     <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
          硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
@@ -105,7 +106,10 @@
     <PackageVersion Include="Microsoft.DiaSymReader" Version="2.2.13" />
     <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.13" />
     <PackageVersion Include="Microsoft.ApplicationInsights" Version="3.2.0" />
-    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.13" />
+    <!-- 2026-11-09：10.0.13→10.0.14。BDN 上游要求 >= 10.0.14，CPM 钉 10.0.13 致 perf-gate
+         Restore NU1109（package downgrade）连续红。补丁版；本仓单目标 net11.0 不用该包 API
+         （IAsyncEnumerable/IAsyncDisposable 为 BCL 内置），属纯传递依赖固定。 -->
+    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />

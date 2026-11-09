@@ -77,6 +77,9 @@ internal static class CommandTimeoutNormalizer
     /// 内层超时解包（D4），越过截止线的一切异常归一时超（D7）。</summary>
     internal static TimeoutException? NormalizeOnce(Exception ex, long startTimestamp, int timeoutSeconds)
     {
+        // M3：调用方取消不是超时——原样上抛，避免取消语义被吞
+        if (ex is OperationCanceledException)
+            return null;
         if (ex is TimeoutException)
             return null;
         if (ex.InnerException is TimeoutException timeout)
@@ -85,9 +88,12 @@ internal static class CommandTimeoutNormalizer
         {
             // 越过截止线后驱动抛出任何类型都视为超时的表现：截止线已过，命令不可能正常完成。
             // 未越线时原样上抛——真正的 SQL 错误（语法、约束）不会等到超时才返回。
-            return new TimeoutException(
+            // L1：打基础设施超时标记，让调用方按 PalORM.InfrastructureTimeout 归入熔断。
+            var infraTimeout = new TimeoutException(
                 $"Command exceeded its {timeoutSeconds}s timeout: the provider interrupted the query and "
                 + $"surfaced {ex.GetType().Name} instead of a timeout exception (MySQL semantics).", ex);
+            infraTimeout.Data["PalORM.InfrastructureTimeout"] = true;
+            return infraTimeout;
         }
         return null;
     }
@@ -101,11 +107,19 @@ internal static class CommandTimeoutNormalizer
 
     private static void ThrowIfElapsed(long startTimestamp, int timeoutSeconds)
     {
-        if (IsPastDeadline(startTimestamp, timeoutSeconds))
+        // M2：成功路径用严格截止线判定，不用容差——容差只用于异常路径（驱动可能提前中断）。
+        // 用容差会把 [timeout-50ms, timeout) 区间的成功结果误判为超时。
+        if (startTimestamp == 0L || timeoutSeconds <= 0) return;
+        double elapsedSeconds =
+            (Stopwatch.GetTimestamp() - startTimestamp) / (double)Stopwatch.Frequency;
+        if (elapsedSeconds >= timeoutSeconds)
         {
-            throw new TimeoutException(
+            // L1：打基础设施超时标记，让调用方按 PalORM.InfrastructureTimeout 归入熔断
+            var timeout = new TimeoutException(
                 $"Command exceeded its {timeoutSeconds}s timeout: the provider interrupted the query "
                 + "but returned a partial result instead of throwing (MySQL semantics).");
+            timeout.Data["PalORM.InfrastructureTimeout"] = true;
+            throw timeout;
         }
     }
 

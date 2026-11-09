@@ -25,6 +25,11 @@
 - **PG DateTime 往返回归测试**：`PostgreSql_DateTimeRoundTrip_ReadThenWriteBackSucceeds` 锁定列型修复；方言对称性差异表登记 PG 侧 `TIMESTAMPTZ`。〔内部〕
 - **新增四项生命周期与存在性 API**：`RestoreAsync`（软删行恢复，`WHERE deleted_at IS NOT NULL` 使重复恢复返回 0，与软删删除的幂等语义对称）、`HardDeleteAsync`（绕过软删改写的物理删除，与非软删实体的 `DeleteAsync` 走同一条路径）、`AnyAsync`（`SELECT 1 … LIMIT 1` 命中即短路，过滤与 `CountAsync` 同源，标量 null 视为无匹配行）、`ExecuteDeleteAsync`（条件删除：要求至少一个用户 `Where`，软删实体改写成 `UPDATE deleted_at` 以保持与 `DeleteAsync` 同语义，`Set`/`Take`/`Skip`/`Join`/`OrderBy`/`GroupBy`/`Having`/`Lock`/`Window`/CTE 构建期拒绝）。`ExecuteNonQueryAsync` 的语义收窄为 UPDATE 专用，与 DELETE 共用同一执行内核（复用槽、参数池、拦截器、观测性只实现一次）。
 - **行锁子句形态断言移到 PG**：`PostgreSql_LockClause_AppearsAfterLimit`，SQLite 侧只断言构建期拒绝。〔内部〕
+- **连接判死自愈完善**：判死标记覆盖写路径（Insert/Update/Delete）与批量/裸连接族（`QueryPipeline`/`SessionBatch`/`CompiledQuery`/`StoredProcBuilder`）——此前这些路径的异步异常不进任何 catch，标记从不置位，外部关连接后不会自愈。SQLite 判死消息按实测修正（原精确匹配 `"Connection is not open"` 是死代码，真实形态为 `…can only be called when the connection is open.`）。连接重建改为先清空复用命令再换连接（清空失败时 `_conn` 仍指向旧连接，无中间态），`created.Dispose` 与逐槽清空均包异常保护。
+- **并发读租约双计修复**：`EnterReadOnly` 保留入参 owner，内层重入短路生效（原硬编码 null 致双计，并发上限实际为 4 而非契约的 8）。同批：注册表代际自增改 `Interlocked.Increment`（防并发 Register/RestoreState 丢失自增）。
+- **构建期守卫补齐**：数组形态 `WhereIn` 补绑定参数上限守卫（与 `AddInClause` 同型）；`DELETE` 复用 `HasIgnoredExecutionModifiers`，拒绝 `Select`/`WithCache`/`AsSplitQuery`（原只查 Take/Skip，这三个会被静默丢弃并扩大影响面）。
+- **超时归一异常打基础设施标记**：归一化的 `TimeoutException` 带 `PalORM.InfrastructureTimeout` 标记，调用方据此归入熔断；超时解包不再误伤 `OperationCanceledException`（取消异常保持原类型传播）。
+- **`ExecuteDeleteAsync` 软删条件恒保留**：`IgnoreFilters` 下与 `DeleteAsync` 同语义（软删实体改写为 `UPDATE deleted_at`）。
 
 ## [6.8.0] - 2026-10-26
 

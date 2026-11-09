@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [![Native AOT](https://img.shields.io/badge/Native_AOT-3_dialects_verified-512BD4)](docs/AOT部署指南.md)
-[![Diagnostics](https://img.shields.io/badge/Compile--time_diagnostics-45_rules-512BD4)](docs/API参考.md)
+[![Diagnostics](https://img.shields.io/badge/Compile--time_diagnostics-46_rules-512BD4)](docs/API参考.md)
 [![Dialects](https://img.shields.io/badge/Dialects-PostgreSQL_·_MySQL_·_SQLite-512BD4)](#数据库兼容性)
 
 简体中文 | [English](README.en.md)
@@ -267,7 +267,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 
 ## 🚀 快速开始
 
-> `.NET 11`（全部包单目标 `net11.0`）+ SDK `11.0.100-rc.2` 或更高，IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
+> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100-rc.3.26522.148`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->

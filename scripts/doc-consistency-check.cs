@@ -12,11 +12,12 @@ Console.OutputEncoding = new UTF8Encoding(false);
 Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" });
 
 Environment.CurrentDirectory = FindRepoRoot();
-var passed = 0; var failed = 0;
-const string RED = "\x1b[0;31m", GREEN = "\x1b[0;32m", NC = "\x1b[0m";
+var passed = 0; var failed = 0; var skipped = 0;
+const string RED = "\x1b[0;31m", GREEN = "\x1b[0;32m", YELLOW = "\x1b[0;33m", NC = "\x1b[0m";
 
 void Fail(string msg) { Console.WriteLine($"{RED}FAIL {msg}{NC}"); failed++; }
 void Pass(string msg) { Console.WriteLine($"{GREEN}PASS {msg}{NC}"); passed++; }
+void Skip(string msg) { Console.WriteLine($"{YELLOW}SKIP {msg}{NC}"); skipped++; }
 
 // ── D 组重构（2026-10-18 质量审计）──
 // 原 D1/D2/D5/D6/D7/D9 六项在 v5.x 文档重构后已无对照对象：每次运行都走"跳过并 PASS"分支，
@@ -132,7 +133,7 @@ foreach (var doc in (string[])[".ai/test/prompt.md", "docs/测试体系路线图
     var text = File.ReadAllText(doc);
     if (!text.Contains("test-counts.json", StringComparison.Ordinal))
         d10Bad.Add($"{doc} 未指向 test-counts.json");
-    foreach (Match m in Regex.Matches(text, @"当前s*(d{3,})s*(?:/|项|$)"))
+    foreach (Match m in Regex.Matches(text, @"当前\s*(\d{3,})\s*(?:/|项|$)"))
         d10Bad.Add($"{doc} 写死计数 {m.Groups[1].Value}");
 }
 if (d10Bad.Count == 0) Pass($"D10 [Test] 计数声明一致（3 个声明文件 + sourceMarkers 地板 = 实测 {markTotal}；2 个指针文件未写死数字）");
@@ -313,7 +314,17 @@ if (File.Exists(".ai/test/prompt.md") && File.Exists("scripts/test-gate.cs"))
         if (m.Groups[2].Value != actual) tLevelBad.Add($"T{id[1..]} 文档={m.Groups[2].Value} 脚本={actual}");
     }
 }
-if (tLevelBad.Count == 0)
+// 2026-11-09（综合根治方案 GATE-4）：集合为空不等于通过——CI 无 .ai 时本项恒 0 项 PASS，
+// 把"判据不适用"呈现为"对账一致"。改为：.ai 缺失 → SKIP（明确不适用）；.ai 在但解析
+// 不出任何 T 条目 → FAIL（判据失明，正则失配或表格被改）。
+if (tLevelChecked == 0)
+{
+    if (!File.Exists(".ai/test/prompt.md"))
+        Skip("D14 .ai/test/prompt.md 缺失（CI 无 .ai 知识层），T 级对账不适用");
+    else
+        Fail("D14 .ai/test/prompt.md 存在但未解析出任何 T 条目声明——判据失明（表格被改或正则失配）");
+}
+else if (tLevelBad.Count == 0)
     Pass($"D14 T 级严重度对账一致（{tLevelChecked} 处 T 项声明与 test-gate 判定方式对齐）");
 else
     Fail($"D14 T 级严重度文档与脚本不一致（{string.Join("；", tLevelBad)}）——改文档级别或改脚本 FAIL/WARN");
@@ -463,7 +474,7 @@ else
 }
 
 Console.WriteLine();
-Console.WriteLine($"通过: {passed}  失败: {failed}");
+Console.WriteLine($"通过: {passed}  失败: {failed}  跳过: {skipped}");
 return failed > 0 ? 1 : 0;
 
 // ── 辅助 ──

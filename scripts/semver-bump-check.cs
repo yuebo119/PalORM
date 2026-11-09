@@ -146,8 +146,12 @@ if (missingArchive && !allowMissingBaseline)
 }
 
 // ── 5. 要求段与对账 ──
-var required = suppressions.Count > 0 ? "MAJOR" : adds.Count > 0 ? "MINOR" : "PATCH";
-Console.WriteLine($"  要求升版: {required}");
+// 2026-11-09（综合根治方案 GATE-3）：行为变更（CHANGELOG 💔 段）不改二进制签名，Package
+// Validation 拦不住，原判据只认抑制文件 → 行为变更可静默走 PATCH。项目政策（发布变更日志
+// 规范 §二/§28）：行为变更走 MINOR + 💔 段 + 升级指南；签名破坏才 MAJOR。
+var behaviorBreak = HasBehaviorBreakSection();
+var required = suppressions.Count > 0 ? "MAJOR" : (adds.Count > 0 || behaviorBreak) ? "MINOR" : "PATCH";
+Console.WriteLine($"  要求升版: {required}" + (behaviorBreak ? "（含行为变更 💔 段）" : ""));
 
 var order = new Dictionary<string, int>(StringComparer.Ordinal) { ["PATCH"] = 1, ["MINOR"] = 2, ["MAJOR"] = 3 };
 var declaredRank = order[declared];
@@ -164,7 +168,10 @@ if (declaredRank < requiredRank)
     }
     else
     {
-        Console.Error.WriteLine("  依据：API 基线相对上一版有新增成员，属于向后兼容的新功能（规则 7）。");
+        if (behaviorBreak)
+            Console.Error.WriteLine("  依据：CHANGELOG 顶部版本段的 💔 破坏性/行为变更段有条目（项目政策：行为变更走 MINOR + 💔 段，见发布变更日志规范 §二）。");
+        else
+            Console.Error.WriteLine("  依据：API 基线相对上一版有新增成员，属于向后兼容的新功能（规则 7）。");
     }
     return 1;
 }
@@ -269,6 +276,34 @@ static string LatestTagVersion(string exclude)
         return v;
     }
     return "";
+}
+
+// 读 CHANGELOG 顶部第一个版本段（Unreleased 或最新版本）的 💔 小节，有条目即为行为变更。
+static bool HasBehaviorBreakSection()
+{
+    const string changelog = "CHANGELOG.md";
+    if (!File.Exists(changelog)) return false;
+    var inFirstSection = false;
+    var inBreak = false;
+    foreach (var line in File.ReadLines(changelog))
+    {
+        if (line.StartsWith("## [", StringComparison.Ordinal))
+        {
+            if (inFirstSection) break; // 只读第一个版本段
+            inFirstSection = true;
+            inBreak = false;
+            continue;
+        }
+        if (!inFirstSection) continue;
+        if (line.StartsWith("### ", StringComparison.Ordinal))
+        {
+            inBreak = line.StartsWith("### 💔", StringComparison.Ordinal);
+            continue;
+        }
+        if (inBreak && line.TrimStart().StartsWith("- ", StringComparison.Ordinal))
+            return true;
+    }
+    return false;
 }
 
 static string FindRepoRoot()

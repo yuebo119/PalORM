@@ -22,6 +22,7 @@
 | `diff-coverage.cs` | diff 覆盖率门禁（T1-diff，测试体系优化方案 T0-5）：只统计本次改动行、阈值 80%；白名单注释行/.g.cs/test·tools·scripts·docs。`-- <base> <head|""> <xml>...`，空 head 表示对工作树；`--self-check` 内嵌夹具自证（Linux/Windows 两种 XML 路径形态） | ✅ verify.yml unit |
 | `public-api-snapshot.cs` | 公开 API 基线快照（`--check` PR 比对，`--update` 显式冻结，`--archive <ver>` 归档到 `bench/baselines/public-api/v<ver>/` 供跨版本比对，`--root <path>` 读取另一份检出用于补历史基线；覆盖 5 个包含 SourceGen） | ✅ verify.yml unit |
 | `flake-ledger.cs` | 每周 flake 台账（Core 3 次 / Integration 2 次独立进程；失败不自动重试；台账在 `artifacts/flake-ledger/`） | ✅ flake-ledger.yml 每周 |
+| `ci-health-check.cs` | CI 健康检查（CI-5）：最近 N 天（默认 7）各工作流结论，红即打印告警；`--strict` 有红 exit 1。数据源 `gh run list --json` | 手工 / 周度报告（分支保护配置后纳入） |
 
 ## 提交前必检
 
@@ -32,6 +33,8 @@
 |------|------|:---:|
 | `secret-guard.cs` | 敏感信息拦截（40 类；默认 staged 模式，`--range BASE..HEAD` 供 CI 扫差异集；file-based app，`dotnet run --file` 调用） | ✅ pre-commit + ci.yml security |
 | `stub-check.cs` | Stub 方法门禁（检测 `=> this` 表达式体与 `NotImplementedException` 空壳） | ✅ pre-commit + ci.yml gate |
+| `check-sdk.cs` | SDK 一致性校验（`global.json` 钉版 vs 本机 `--list-sdks`；不匹配时打印 `dotnet-install` 命令并联出已装版本；`--self-check` 内嵌好/坏/非 disable 三夹具自证判据。`rollForward: disable` 精确匹配，其余取值宽松兜底） | pre-commit 前置（bash 层同判据，防钉版缺失时 `dotnet run` 不可用） + 手工/CI |
+| `check-locked-tests.cs` | 锁定测试门禁（LOCK-1）：src/ 变更必须伴随 test/ 变更，例外须登记 `.ai/src-only-registry.md`（表格首列文件路径）。`git diff --name-only HEAD` 取变更集，src 有而 test 无且未登记 → exit 1 | ✅ pre-commit + 手工 |
 | `precommit-build-check.cs` | 受影响项目构建（编译面变更即全量 `PalORM.ci.slnf` Debug 增量；非编译文件跳过） | pre-commit 专属 |
 | `test-quality-scripts.cs` | 脚本质量自检（CI 模式自动跳过 `.ai` 段，仍回归 stub/SDK/secret-guard/语言门禁四段） | ✅ pre-commit 语义 + ci.yml gate |
 

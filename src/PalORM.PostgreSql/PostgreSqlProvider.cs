@@ -251,6 +251,10 @@ public sealed class PostgreSqlProvider : IDbProvider
     /// （MySQL/SQLite 容忍弱类型故未暴露）。</para></summary>
     public static DbParameter CreateParameter(string name, object? value)
     {
+        // DEC-4（ADR-X）：DateTime 归一 UTC——与 timestamptz 列语义一致（Local 转 UTC 时刻，
+        // Unspecified 按 UTC 标记），避免本地时区静默偏移。
+        if (value is DateTime dt && dt.Kind != DateTimeKind.Utc)
+            value = dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : new DateTime(dt.Ticks, DateTimeKind.Utc);
         var parameter = new NpgsqlParameter(name, value ?? DBNull.Value);
         // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）。
         // C1（2026-10-01 全 API 逐项轮）：case 频率重排——int/long/string/Guid 等高频类型前置

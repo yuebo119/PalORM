@@ -129,27 +129,17 @@ var coveredByFile = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalI
 var executableByFile = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
 foreach (string xmlPath in xmlPaths)
 {
-    string xml = File.ReadAllText(xmlPath);
-    var idToPath = new Dictionary<int, string>();
-    foreach (Match sf in Regex.Matches(xml, "<source_file id=\"(\\d+)\" path=\"([^\"]+)\""))
+    foreach ((string path, bool covered, int start, int end) in EnumerateRanges(File.ReadAllText(xmlPath)))
     {
-        idToPath[int.Parse(sf.Groups[1].Value, CultureInfo.InvariantCulture)] = sf.Groups[2].Value;
-    }
-    foreach (Match rg in Regex.Matches(xml,
-        "<range source_id=\"(\\d+)\" start_line=\"(\\d+)\" end_line=\"(\\d+)\"[^>]*covered=\"(yes|no)\""))
-    {
-        int id = int.Parse(rg.Groups[1].Value, CultureInfo.InvariantCulture);
-        if (!idToPath.TryGetValue(id, out string? path)) continue;
         if (!executableByFile.TryGetValue(path, out var executable))
             executableByFile[path] = executable = [];
         HashSet<int>? coveredSet = null;
-        if (rg.Groups[4].Value == "yes")
+        if (covered)
         {
             if (!coveredByFile.TryGetValue(path, out coveredSet))
                 coveredByFile[path] = coveredSet = [];
         }
-        for (int ln = int.Parse(rg.Groups[2].Value, CultureInfo.InvariantCulture);
-             ln <= int.Parse(rg.Groups[3].Value, CultureInfo.InvariantCulture); ln++)
+        for (int ln = start; ln <= end; ln++)
         {
             executable.Add(ln);
             coveredSet?.Add(ln);
@@ -227,6 +217,35 @@ static (int Total, int Covered, List<string> Detail) Compare(
     return (totalRelevant, totalCovered, uncoveredDetail);
 }
 
+/// <summary>遍历一份 dotnet-coverage XML 的 (文件, 是否覆盖, 起行, 止行) 区间。
+/// <para><b>必须按 &lt;module&gt; 分块解析</b>：source_file 的 id 在每个 module 内独立编号
+/// （实测 4~5 个 module，id 均从 0 重启，如 PalORM.Sqlite.dll 的 id=0 是 SqliteProvider.cs，
+/// PalORM.Core.dll 的 id=0 却是 RegexGenerator.g.cs）。用全局 id→path 映射会被后一个 module
+/// 覆盖，range 归属错乱——2026-11-09 实测 SqliteProvider.cs 的 16-17 行 covered=yes，却因
+/// id=0 被同 id 的 .g.cs 覆盖而报「0/2 未覆盖」，diff 覆盖率假红（本地 75.4% / CI 0.0%）。</para>
+/// <para>同一文件出现在多个 module 时取并集（任一 module 命中即算覆盖）。</para></summary>
+static IEnumerable<(string Path, bool Covered, int Start, int End)> EnumerateRanges(string xml)
+{
+    foreach (Match mod in Regex.Matches(xml, "<module [^>]*>.*?</module>", RegexOptions.Singleline))
+    {
+        string block = mod.Value;
+        var idToPath = new Dictionary<int, string>();
+        foreach (Match sf in Regex.Matches(block, "<source_file id=\"(\\d+)\" path=\"([^\"]+)\""))
+        {
+            idToPath[int.Parse(sf.Groups[1].Value, CultureInfo.InvariantCulture)] = sf.Groups[2].Value;
+        }
+        foreach (Match rg in Regex.Matches(block,
+            "<range source_id=\"(\\d+)\" start_line=\"(\\d+)\" end_line=\"(\\d+)\"[^>]*covered=\"(yes|no)\""))
+        {
+            if (!idToPath.TryGetValue(int.Parse(rg.Groups[1].Value, CultureInfo.InvariantCulture), out string? path))
+                continue;
+            yield return (path, rg.Groups[4].Value == "yes",
+                int.Parse(rg.Groups[2].Value, CultureInfo.InvariantCulture),
+                int.Parse(rg.Groups[3].Value, CultureInfo.InvariantCulture));
+        }
+    }
+}
+
 /// <summary>按路径后缀匹配文件（git 给相对路径，覆盖率 XML 给绝对路径；两平台分隔符不同）。</summary>
 static HashSet<int>? FindBySuffix(Dictionary<string, HashSet<int>> byPath, string normalizedFile)
 {
@@ -286,6 +305,37 @@ static int SelfCheck(double thresholdPercent)
         ("坏夹具③（可执行部分 3/5 命中 = 60% < 阈值）", 1,
             Judge(diffLines, threeOfFiveCovered, halfExecutable, thresholdPercent)),
     };
+
+    // 夹具④（2026-11-09）：module 内 source_file id 独立重启的解析正确性。
+    // 两个 module 都以 id=0 指代各自的首个文件：按 module 分块解析时 A.cs 与 B.cs 各自命中（2/2，exit 0）；
+    // 若退回全局 id→path 映射，后一个 module 覆盖前一个，A.cs 落进"文件不在 XML"分支全未覆盖（1/2，exit 1）。
+    string twoModules = string.Join("\n",
+        "<results><modules>",
+        "<module id=\"A\" name=\"A.dll\"><functions><function id=\"1\" name=\"M1\"><ranges>",
+        "<range source_id=\"0\" start_line=\"10\" end_line=\"10\" covered=\"yes\" />",
+        "</ranges></function></functions>",
+        "<source_files><source_file id=\"0\" path=\"/w/src/A.cs\" /></source_files></module>",
+        "<module id=\"B\" name=\"B.dll\"><functions><function id=\"2\" name=\"M2\"><ranges>",
+        "<range source_id=\"0\" start_line=\"10\" end_line=\"10\" covered=\"yes\" />",
+        "</ranges></function></functions>",
+        "<source_files><source_file id=\"0\" path=\"/w/src/B.cs\" /></source_files></module>",
+        "</modules></results>");
+    var twoModuleCovered = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+    var twoModuleExecutable = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+    foreach ((string path, bool covered, int start, int end) in EnumerateRanges(twoModules))
+    {
+        if (!twoModuleExecutable.TryGetValue(path, out var exe)) twoModuleExecutable[path] = exe = [];
+        HashSet<int>? cov = null;
+        if (covered && !twoModuleCovered.TryGetValue(path, out cov)) twoModuleCovered[path] = cov = [];
+        for (int ln = start; ln <= end; ln++) { exe.Add(ln); cov?.Add(ln); }
+    }
+    var twoModuleDiff = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal)
+    {
+        ["src/A.cs"] = [10],
+        ["src/B.cs"] = [10],
+    };
+    cases.Add(("好夹具④（module 内 id 重启：两 module 的 id=0 各自归属，2/2 命中）", 0,
+        Judge(twoModuleDiff, twoModuleCovered, twoModuleExecutable, thresholdPercent)));
 
     bool ok = true;
     foreach ((string name, int expected, int actual) in cases)

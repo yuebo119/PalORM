@@ -253,15 +253,30 @@ public sealed partial class DataSession<TProvider>
             {
                 if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))
                     continue;
-                HashSet<string> actual = await ReadSqliteColumnsAsync(tableName, ct).ConfigureAwait(false);
+                HashSet<string>? actual = await ReadSqliteColumnsAsync(tableName, ct).ConfigureAwait(false);
+                if (actual is null)
+                {
+                    drift.Add($"Validation failed for table '{tableName}'");
+                    continue;
+                }
                 AppendDrift(drift, tableName, expected, actual);
             }
             return drift;
         }
 
-        // PostgreSQL / MySQL：一次查询取回当前 schema 全部表列，内存里按注册表筛选
-        Dictionary<string, HashSet<string>> columnsByTable =
-            await ReadInformationSchemaColumnsAsync(ct).ConfigureAwait(false);
+        // PostgreSQL / MySQL：一次查询取回当前 schema 全部表列，内存里按注册表筛选。
+        // H1：读失败不得让已成功的迁移抛异常（ADR-W：迁移成功/失败语义不变）——
+        // 记为 Validation failed，与 ValidateSchemaAsync / SQLite 分支口径一致。
+        Dictionary<string, HashSet<string>> columnsByTable;
+        try
+        {
+            columnsByTable = await ReadInformationSchemaColumnsAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            drift.Add($"Validation failed: {ex.GetType().Name}");
+            return drift;
+        }
         foreach ((Type type, string tableName) in PalORM_Runtime.TableNames)
         {
             if (!PalORM_Runtime.ColumnNames.TryGetValue(type, out IReadOnlyList<string>? expected))
@@ -295,7 +310,7 @@ public sealed partial class DataSession<TProvider>
     /// <summary>SQLite：逐表 <c>PRAGMA table_xinfo</c>（<c>table_info</c> 不返回 <c>[Computed]</c>
     /// 生成的 STORED 列）。表不存在时 PRAGMA 返回空结果集而非抛错。
     /// 读失败按 ValidateSchemaAsync 口径只记异常类型名，不把驱动消息里的拓扑信息带出。</summary>
-    private async ValueTask<HashSet<string>> ReadSqliteColumnsAsync(string tableName, CancellationToken ct)
+    private async ValueTask<HashSet<string>?> ReadSqliteColumnsAsync(string tableName, CancellationToken ct)
     {
         HashSet<string> columns = new(StringComparer.Ordinal);
         await using DbCommand cmd = CreateCommand();
@@ -310,9 +325,8 @@ public sealed partial class DataSession<TProvider>
         }
         catch (DbException)
         {
-            // 连接/权限问题：当作"读不到列"，由 AppendDrift 报表缺失。
-            // 取消异常不在此捕获，自然向上传播。
-            columns.Clear();
+            // M5：读失败与表缺失是两种信号，返回 null 由调用侧报 Validation failed
+            return null;
         }
         return columns;
     }
@@ -327,14 +341,19 @@ public sealed partial class DataSession<TProvider>
         await using DbCommand cmd = CreateCommand();
         cmd.CommandText = sql;
         cmd.CommandTimeout = ProbeCommandTimeoutSeconds;
-        Dictionary<string, HashSet<string>> byTable = new(StringComparer.Ordinal);
+        // M4：MySQL 在 lower_case_table_names=1/2（Windows/macOS 默认）下表名被折叠为小写，
+        // 注册表保留 [Table] 原始大小写，Ordinal 比较会误报表不存在。
+        StringComparer tableComparer = TProvider.Dialect == SqlDialect.MySql
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        Dictionary<string, HashSet<string>> byTable = new(tableComparer);
         await using DbDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             string table = reader.GetString(0);
             string column = reader.GetString(1);
             if (!byTable.TryGetValue(table, out HashSet<string>? set))
-                byTable[table] = set = new HashSet<string>(StringComparer.Ordinal);
+                byTable[table] = set = new HashSet<string>(tableComparer);
             set.Add(column);
         }
         return byTable;

@@ -27,6 +27,9 @@ public sealed class StoredProcBuilder
     private readonly bool _syncRowRead;
 
     private readonly Func<string, object?, DbParameter> _paramFactory;
+    /// <summary>FLT4-4（2026-11-09）：连接判死回调——由 DataSession 注入
+    /// <see cref="DataSession{TProvider}.MarkConnectionPoisoned"/>，执行失败时通知会话置位。</summary>
+    private readonly Action<Exception>? _connectionFailureHandler;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
@@ -36,7 +39,8 @@ public sealed class StoredProcBuilder
         SessionOperationState operationState,
         bool validateColumnOrder = false,
         bool syncIo = false,
-        bool syncRowRead = false)
+        bool syncRowRead = false,
+        Action<Exception>? connectionFailureHandler = null)
     {
         _validateColumnOrder = validateColumnOrder;
         _conn = conn;
@@ -46,6 +50,7 @@ public sealed class StoredProcBuilder
         _operationState = operationState;
         _syncIo = syncIo;
         _syncRowRead = syncRowRead;
+        _connectionFailureHandler = connectionFailureHandler;
     }
 
     /// <summary>过程名白名单：字母/下划线开头，仅含字母数字、下划线和点分限定符。
@@ -176,7 +181,8 @@ public sealed class StoredProcBuilder
         }
         else
         {
-            reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { _connectionFailureHandler?.Invoke(ex); throw; }
         }
         await using (reader)
         {
@@ -198,7 +204,9 @@ public sealed class StoredProcBuilder
         cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(_timeout);
         cmd.Transaction = _operationState.GetActiveTransaction();
         foreach (var p in _parameters) cmd.Parameters.Add(p);
-        int result = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        int result;
+        try { result = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { _connectionFailureHandler?.Invoke(ex); throw; }
         return result;
     }
 

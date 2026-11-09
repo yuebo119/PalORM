@@ -396,7 +396,8 @@ internal sealed class SessionOperationState
             }
             Interlocked.Increment(ref _activeReadLeases);
             _readLeaseDepth.Value = 1;
-            return new SessionOperationLease(this, owner: null, readOnly: true);
+            // H2：保留入参 owner，使内层 EnterReadOnly(owner) 的重入短路生效（原硬编码 null 致双计）
+            return new SessionOperationLease(this, owner, readOnly: true);
         }
     }
 

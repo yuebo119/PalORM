@@ -146,7 +146,9 @@ internal static class MirrorTable
     public static async ValueTask CleanAsync(
         DbConnection raw, SqlDialect dialect, CancellationToken ct = default)
     {
-        foreach (string table in (string[])[BulkTable, BulkMirror, WideTable, WideMirror, SoftDeleteTable, SoftDeleteMirror])
+        // SoftDeleteMirror 不在此列：它只在 SQLite 专用测试类（SingleRowDualSideTests /
+        // DualSideComparisonTests）由手写 DDL 建立，PG/MySQL 上不建，删除会报 relation does not exist。
+        foreach (string table in (string[])[BulkTable, BulkMirror, WideTable, WideMirror, SoftDeleteTable])
         {
             await using DbCommand command = raw.CreateCommand();
             command.CommandText = $"DELETE FROM {DialectSql.Quote(dialect, table)}";

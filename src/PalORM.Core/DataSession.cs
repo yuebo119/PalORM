@@ -1429,15 +1429,46 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
                 setup.CommandText = _options.SessionSetupSql;
                 setup.ExecuteNonQuery();
             }
+            // FIX-5（2026-11-09）：先清空复用命令再换 _conn——清空失败时 _conn 仍指向 old
+            // （有效连接），不出现「_conn 已换但复用命令未清空」或「old 泄漏」的中间态。
+            // C1：连接已换，旧连接上的复用命令全部失效——清空避免后续操作复用旧命令
+            InvalidateReusableCommands();
             _conn = created;
             Volatile.Write(ref _connectionPoisoned, 0);
+            old.Dispose();
         }
         catch
         {
-            created.Dispose();
+            try { created.Dispose(); } catch { /* 重建失败，主异常优先，不掩盖 */ }
             throw;
         }
-        old.Dispose();
+    }
+
+    /// <summary>清空全部复用命令槽（连接重建后调用）：6 个 CRUD 槽与直查槽的命令都绑定在
+    /// 旧物理连接上，连接重建后必须一并失效，否则命中槽的操作会继续用旧连接命令执行。
+    /// 直查槽（<c>_querySlot</c>）已有连接引用校验，此处一并清空以保持一致。</summary>
+    private void InvalidateReusableCommands()
+    {
+        // FIX-5（2026-11-09）：逐个 try/catch——一个槽的 Dispose 失败不得阻止其余槽清空
+        // （原实现首槽抛异常即中止，后续槽残留旧连接命令）。
+        try { _reusableInsert?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableInsert = null;
+        try { _reusableUpdate?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableUpdate = null;
+        try { _reusableGetByKey?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableGetByKey = null;
+        try { _reusableDelete?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableDelete = null;
+        try { _reusableUpsert?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableUpsert = null;
+        try { _reusableSoftDelete?.Command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+        _reusableSoftDelete = null;
+        if (_querySlot?.Command is { } command)
+        {
+            try { command.Dispose(); } catch { /* 单槽失败不阻塞其余清空 */ }
+            _querySlot.Command = null;
+            _querySlot.Connection = null;
+        }
     }
 
     /// <summary>执行失败时判定是否连接判死（<see cref="IDbProvider.IsConnectionFailure"/>）。
@@ -1448,6 +1479,41 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         {
             Volatile.Write(ref _connectionPoisoned, 1);
         }
+    }
+
+    // ── FLT4-3/4（2026-11-09）：执行叶子的判死包装 ──
+    // 批量（DataSession_Bulk）与裸连接族（QueryPipeline/SessionBatch/CompiledQuery）此前
+    // 直接 await ExecuteNonQueryAsync/ExecuteReaderAsync/ExecuteScalarAsync，异步异常不进
+    // 任何 catch → 判死标记从不置位，外部关连接后这些路径不会自愈。统一走包装方法，
+    // 命中 IsConnectionFailure 即置位（MarkConnectionPoisoned 内置过滤，不误伤其他异常）。
+    internal async ValueTask<int> ExecuteRowsWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<DbDataReader> ExecuteReaderWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<object?> ExecuteScalarWithPoisonAsync(DbCommand command, CancellationToken ct)
+    {
+        try { return await command.ExecuteScalarAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<int> ExecuteBatchWithPoisonAsync(DbBatch batch, CancellationToken ct)
+    {
+        try { return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    internal async ValueTask<DbDataReader> ExecuteBatchReaderWithPoisonAsync(DbBatch batch, CancellationToken ct)
+    {
+        try { return await batch.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
     }
 
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
@@ -1728,11 +1794,14 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <para><b>为什么值得单独一个重载</b>：单条写路径（Update/Delete/ExecuteAsync）
     /// 每次调用都过这里，是每操作固定成本；208 B 在 MySQL Insert 的 4241 B/行上约 5%，
     /// 在 BulkInsert 的 1222 B/行上约 17%。</para></summary>
-    private ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
+    // FLT4-2（2026-11-09）：原实现只包 ValueTask 构造不 await，异步异常（如连接判死）
+    // 落在返回的 ValueTask 里、根本进不了 catch——写路径的连接判死标记从未置位。
+    // 改 async + await 后异步异常可被 MarkConnectionPoisoned 捕获。
+    private async ValueTask<int> ExecuteWriteRowsAsync(DbCommand command, DbTransaction? activeTransaction, CancellationToken ct)
     {
         try
         {
-            return ExecuteWriteRowsCoreAsync(command, activeTransaction, ct);
+            return await ExecuteWriteRowsCoreAsync(command, activeTransaction, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

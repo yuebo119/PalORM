@@ -214,6 +214,32 @@ public sealed class ErrorContractTests
         }
     }
 
+    /// <summary>D7：MySQL ExecuteNonQuery 超时归一为 TimeoutException（驱动抛 MySqlException，经 NormalizeOnce 归一）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("CfTimeoutProbe")]
+    public async Task E4_MySql_ExecuteNonQuery_Timeout_ThrowsTimeoutException()
+    {
+        await using DataSession<MySqlProvider> db = await TestDb.MySqlAsync();
+        await db.ExecuteAsync(
+            $"CREATE TABLE IF NOT EXISTS cf_timeout_probe (Id BIGINT PRIMARY KEY NOT NULL, name TEXT NOT NULL)");
+        await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        await db.InsertAsync(new CfTimeoutProbeEntity { Id = 1, Name = "probe" });
+        try
+        {
+            db.WithTimeout(TimeSpan.FromSeconds(1));
+            await Assert.That(async () => await db.From<CfTimeoutProbeEntity>()
+                    .Where($"SLEEP(5) = 0")
+                    .Set(x => x.Name, "x")
+                    .ExecuteNonQueryAsync())
+                .Throws<TimeoutException>();
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DELETE FROM cf_timeout_probe");
+        }
+    }
+
     /// <summary>D7：分页（<c>ToPageAsync</c>）在 MySQL 上走事务内 <c>DbBatch</c>（COUNT 与页查询
     /// 单次往返），超时判定与单语句查询同口径；超时后事务回滚且会话仍可用。</summary>
     [Test]

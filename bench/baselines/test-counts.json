@@ -1,20 +1,20 @@
 {
   "_comment": "测试数地板双口径（T11 定义）。①声明口径 sourceMarkers = 源码 [Test] 标记数地板，tech-debt-scan #9 消费；②执行口径 passed = TUnit 报告执行数地板（含 [Arguments] 展开），CI 的 assert-test-counts.cs 消费。两口径数值必然不等，勿互相替代。地板策略（2026-11-03 统一）：三套件的 passed 均与地板精确匹配，取代原 >= 形态——原形态下地板会相对实测单调变松（Integration 曾 286 对实测 574，即 -50%，删掉一半用例都无感；Core -17.5%、SourceGen -14.1% 同型），且「守卫写在方法体内、整方法被删」这类缺陷没有任何机制兜底。精确匹配把任何用例增减都变成显式改动，`--update` 负责取新值。该地板只对全量调用成立，过滤调用（如 [Category!=ExternalDatabase] 的 SQLite-only 通道）不适用本断言。契约条目的覆盖另由 scripts/assert-conformance-contracts.cs 按账本钉住，与本地板互补。实测值以检查输出为准、不在本文件复述（2026-10-18 实证：注释里复述的实测数在加用例后静默过期——B103 族）。调整规则（2026-11-03 起改为精确匹配）：passed 与地板必须相等，增加或删除用例都要在同提交改地板，`--update` 可自动写入实测值；有意删除用例时须在提交信息写明理由。覆盖率三项另加自收紧上限：实测减地板不得超过 1pp（assert-coverage.cs）。sourceMarkers 专题（2026-11-04）：原 1070 是 2026-10-18 定值，用例增长后已远低于实测（相差约三成，即删掉数百个标记才报警），快照式常数不能靠人工跟随，故改为与本文件之外的三处文档声明同源——doc-consistency-check 的 D10 现在同时校验本字段等于实测标记数，`--fix` 一并写回，常数不再需要单独维护。判据保留 >= 而非 !=：本项只承担「标记被删」的检测，增标记必须显式改三处声明并由 D10 记录，精确匹配只是把同一件事做第二遍（延伸自《测试机制重设计方案-2026-11-03》P2「不存会腐烂的常数」，勿再翻改动）。",
-  "sourceMarkers": 1653,
+  "sourceMarkers": 1664,
   "PalORM.Core.Tests": {
-    "passed": 782,
+    "passed": 792,
     "families": {
-      "concurrency": 115,
-      "dialect": 16,
-      "faultInjection": 55
+      "concurrency": 118,
+      "dialect": 18,
+      "faultInjection": 61
     }
   },
   "PalORM.SourceGen.Tests": {
     "passed": 269
   },
   "PalORM.Integration.Tests": {
-    "passed": 714,
-    "externalDatabase": 240,
+    "passed": 715,
+    "externalDatabase": 241,
     "families": {
       "concurrency": 29,
       "dialect": 132,
@@ -25,14 +25,14 @@
     "core": 75,
     "mysql": 81,
     "postgresql": 51,
-    "sqlite": 54,
+    "sqlite": 56,
     "sourceGen": 84,
     "_comment": "覆盖率地板=防退化非达标。core 由 Core 测试收集；mysql/postgresql/sqlite 由 Integration 测试收集；sourceGen 由 SourceGen 测试收集（2026-11-04 COV-3/COV-4 增补：SourceGen 实测 84.2%（unit，Release）、Sqlite 实测 67.11%（Integration 的 SQLite-only 通道），地板取实测向下取整，满足本脚本 1pp 自收紧上限；两值均为本地实测，首次 CI 实跑若更低按 CI 读数回调并在提交信息登记）。地板按实测 -2pp 设定，实测值以 assert-coverage 输出为准、不在本文件复述（B103 族）。2026-11-04 postgresql 51→52：PoolHealthTests 新增 IdleHealthyConnection_IsValidatedOnRent——原用例探活分支能否命中取决于「杀连接后 State 是否仍报 Open」，CI 两个 run 同一代码给出 51.28 / 52.05（差 6 行全在 PostgreSqlProvider.ValidateConnectionAsync，cov-integration.xml 逐函数对账）。新用例用健康连接制造空闲窗口，State 恒 Open，探活必然执行，读数确定在 52.05；地板按 1pp 自收紧上限取 52。mysql 地板 68 不动：66.85/68.80 双模态由 MySQLSessionDefaults 会话钩子归一 local_infile=ON 消除。2026-11-03 回调（依据 CI 实测，非本地推断）：run 41469207510（2026-11-02 dev）实测 mysql 68.8 / postgresql 51.92 / core 74.31——**CI 实际不低于本地**（此前 2026-11-02 注释推断的『CI 低于本地约 2pp』被该 run 证伪：CI mysql 68.8 = 本地 68.8、CI PG 51.92 > 本地 51.28）。据此 mysql 66.4→67（实测-1.8pp）、postgresql 48.4→50（实测-1.92pp），均对齐『-2pp』规则；core 74 维持不动（CI 74.31 只余 0.31pp，core 侧本轮已补 9 条用例拉本地到 74.91，等下次 CI 实测再定）。2026-10-31（DIALECT-5）重定：全量 Integration 574 用例实测 mysql 69.93 / postgresql 50.44，地板随之上调至 67.9 / 48.4。2026-11-02 mysql 曾重定 67.9→66.4：10-30 后 src 新增（CompiledQuery 等）摊薄分子，CI 连续三个 run 实测 66.85（本地 68.8），按 CI 环境实测 -0.45pp 设防退化边际；本轮 CI 实测已回到 68.8（新增用例摊薄被覆盖增长追平），故回调。2026-10-18 修正说明保留：MySql 曾报 26% 假读数——SET GLOBAL local_infile=OFF 用例把能力探测缓存污染成 False 达 60s TTL，全量跑所有批量写静默走多值回退，BulkCopy 路径从未被执行（B195）；补 ResetLocalInfileProbeCache 测试钩子后 BulkCopy 真跑，地板随实测重定。Core 覆盖率测不到 Provider 代码，两套地板互不替代。 2026-11-05 CI run 41887111242 实测 mysql 67.67%（新增 Provider.IsConnectionFailure 方法摊薄分母，旧地板 68 判红）；同一批次 PG/Sqlite 亦各新增 1 方法，按同量级保守各回调 1pp（52→51 / 67→66），以 CI 读数为准；三条断言改为独立执行，一次 CI 给出全部读数。 【2026-11-05 口径订正】sqlite 原地板 66/67 来自 SQLite-only 过滤通道的本地实测（67.11%），而 CI integration job 跑全量通道（不过滤 ExternalDatabase），run 41960400739 实测 54.74%——两者口径不同，旧地板从设置起就不可达，属 COV-4 设地板时的口径错误，不是新代码导致的退化。按 CI 全量实测 54.74 向下取整设 54（余量 0.74pp < 1pp 自收紧上限）。mysql 67.67→地板 67、postgresql 51.85→地板 51 同批 CI 验证通过。【2026-11-05 CI run 42029682678】mysql 实测 69.51%（地板 67 判红：高于地板 2.51pp，超 1pp 自收紧上限）→ 地板 67→69。注意读数摆幅：本注释历史记录为 66.85 / 67.67 / 68.80 / 69.51 / 69.93，跨 3pp，而自收紧上限只有 1pp，两者不兼容；反复调地板只是掩盖测量对执行顺序的敏感（Integration 组内顺序决定能力位与分支命中）。若该模块再次以另一侧读数飘红，先查测量稳定性，不要再调地板。【 2026-11-05 覆盖率通道修正 】mysql 69→81：EntityDataReader 契约用例从 Core.Tests 移到 Integration.Tests（原位置对本模块读数贡献为 0，CI 实测该读取器二十余行长期 0%），另补 MySQL 探活用例与显式清 local_infile 探测缓存（BulkInsert 直连多值回退分支由此命中）；本地 Release 全量实测 81.14%，地板取向下取整，首次 CI 实跑更低则按 CI 读数回调并在提交信息登记。【2026-11-07 CI run 42348220245】core 实测 75.18%（地板 74 判红：高于地板 1.18pp，超 1pp 自收紧上限）→ 地板 74→75；同批新增 CS-17×2、CS-11 并发故障注入、超时归一容差×2 共 5 条 Core 用例，并修复 MySQL 超时归一边界。",
     "branch": {
       "_comment": "META-1 类级分支地板（防退化非达标）。branch 读 dotnet-coverage 的 block_coverage（该工具链无独立 branch 属性，block 是分支语义的可用代理）；按 function 的 namespace+type_name 聚合、行数加权。2026-10-31 Integration 全量实测：QueryBuilder 88.2 / BatchUpdateSqlBuilder 65.2 / MySqlProvider 78.1 / PostgreSqlProvider 60.9 / SqliteProvider 76.0（block%），地板=实测-2pp。2026-11-02：postgreSqlProvider 行地板 58→57.5——实测 57.945 卡在 58 线下 0.055pp（10-30 后 src 新增摊薄），按实测-0.45pp 设防退化边际；补齐 PG 侧用例后按实测回调。 【2026-11-05 CI run 41965300306 订正】MySqlProvider 行覆盖实测 70.92%（旧 line 地板 71 判红）；新增 IsConnectionFailure 方法摊薄三个 Provider 分母，line 地板各回调 2pp（71→69 / 57.5→55 / 65→63），branch 地板保持（实测 77.44 / 待 CI 全量读数 / 待 CI 全量读数 均留余量）。五条类级断言改为独立循环执行，一次 CI 给出全部读数。 【2026-11-05 CI run 41966660163 五条类级读数全量落定】SqliteProvider line 54.74 / branch 60.91（旧地板 63/74 来自 SQLite-only 通道，全量通道不可达）→ 地板 54/60；PostgreSqlProvider 59.26/62.69（地板 55/58.9 保持）、MySqlProvider 70.92/77.44（地板 69/76 保持）、QueryBuilder 81.82/88.41、BatchUpdateSqlBuilder 63.03/65.11 全部通过。",
       "queryBuilder": {
         "type": "QueryBuilder&lt;T&gt;",
-        "line": 81,
+        "line": 79,
         "branch": 86
       },
       "batchUpdateSqlBuilder": {

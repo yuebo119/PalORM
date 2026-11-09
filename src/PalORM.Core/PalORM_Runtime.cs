@@ -185,7 +185,8 @@ public static class PalORM_Runtime
     {
         ArgumentNullException.ThrowIfNull(state);
         Volatile.Write(ref _state, state);
-        Volatile.Write(ref _registryGeneration, _registryGeneration + 1);
+        // M3'：读-改-写改原子自增，防并发 Register/RestoreState 丢失自增
+        Interlocked.Increment(ref _registryGeneration);
         DataSessionCache.ClearForTesting();
     }
 
@@ -395,7 +396,8 @@ public static class PalORM_Runtime
             next._entityInfo = entityInfo.ToFrozenDictionary();
 
             Volatile.Write(ref _state, next);
-            Volatile.Write(ref _registryGeneration, _registryGeneration + 1);
+            // M3'：读-改-写改原子自增，防并发 Register/RestoreState 丢失自增
+            Interlocked.Increment(ref _registryGeneration);
         }
     }
 
