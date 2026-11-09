@@ -40,6 +40,35 @@ public sealed class DirectQuerySlotCoverageTests
             .Because("判死标记应触发重建，重建出的新连接不经 wrapper");
     }
 
+    /// <summary>连接重建后编译计划的旧命令失效：<see cref="CompiledQuery{T, TProvider}"/>
+    /// 的 EnsureCommand 比对连接引用，不一致即 Dispose 并重建（C1）。</summary>
+    [Test]
+    public async Task CompiledPlan_AfterConnectionRebuild_InvalidatesStaleCommand()
+    {
+        var boom = new InvalidOperationException("ExecuteReader can only be called when the connection is open.");
+        // 命令序号：Insert(1) → 计划执行(2) → Scalar 判死(3) → Scalar 触发重建(4) → 计划再执行
+        var created = await FaultInjectionFixtures.CreateAsync(
+            keeper => new FaultyConnection(keeper).FailOnceOnCommand(3, boom));
+        await using DataSession<SqliteProvider> session = created.Session;
+        using CompiledQuery<FaultRow, SqliteProvider> plan = session.Compile<FaultRow>(
+            "SELECT Id, Name, Qty FROM fault_row WHERE Id = @p0", "@p0");
+        await session.InsertAsync(FaultInjectionFixtures.Row("seed", 1));
+
+        List<FaultRow> first = await plan.ExecuteAsync([1L]);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        // 判死标记置位
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await session.ScalarAsync<long>($"SELECT COUNT(*) FROM fault_row"));
+        // 下次建命令前重建（新连接）→ 计划旧命令的连接引用失效
+        long count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM fault_row");
+        await Assert.That(count).IsEqualTo(1);
+
+        List<FaultRow> second = await plan.ExecuteAsync([1L]);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].Name).IsEqualTo("seed");
+    }
+
     /// <summary>GetByKeyMany 读路径判死：异常落进外层 catch 置位判死标记（C2）。</summary>
     [Test]
     public async Task GetByKeyMany_ConnectionPoisoning_MarksPoisoned()
