@@ -16,7 +16,7 @@
 
 | 优先级 | 文件 | 用途 |
 |-------|------|------|
-| **最高** | `.editorconfig` | SonarAnalyzer 39 条规则（P0+P1 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
+| **最高** | `.editorconfig` | SonarAnalyzer 39 条 dotnet_diagnostic（19 error，编译期阻断；口径=全部 dotnet_diagnostic 严重性条目含 *.g.cs 段） |
 | **高** | `.ai/lessons.md` | 规范系统手册 v7.45（217 缺陷：A1-A7 + B1-B210 + XI 性能测量纪律 SOP，本地工具，独立嵌套 git 仓库） |
 | **高** | `.ai/perf-ledger.md` | 性能决策账本（EPSL §4.4 三表：已用/不做/勿重开；立项前必查勿重开表，B182） |
 | **高** | `.ai/test/prompt.md` | 测试规范系统 v1.3（24 铁律 + 19 缺陷，本地工具，不入仓库） |
