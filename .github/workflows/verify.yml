@@ -316,8 +316,11 @@ jobs:
         steps:
             - uses: actions/checkout@v7
               with:
-                  # 需要 base 提交的历史；浅克隆下 diff 拿不到基线
-                  fetch-depth: 200
+                  # 需要 base 提交的历史与分支引用：tag 触发（release.yml workflow_call）
+                  # 时 base 落 origin/main，浅克隆（fetch-depth:200）只 fetch 触发 ref
+                  # 的历史、不含 origin/main 引用，git diff 直接 unknown revision
+                  #（2026-11-22 v6.9.0 第二次 release run 实测）。对齐 gate 步全量。
+                  fetch-depth: 0
             - uses: actions/setup-dotnet@v6
               with:
                   global-json-file: global.json
