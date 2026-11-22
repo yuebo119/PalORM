@@ -32,11 +32,17 @@ internal interface IPerfImplementation
     // 现矩阵的写路径只有 per-op 形态（每操作一个会话），而"高吞吐逐行写"的真实形态是
     // 池化租还：一次租期写一行再归还。三项各测一条，三方言都跑。
     /// <summary>池化单行 INSERT（租出 → 写 → 归还）。ADO/Dapper 无会话税，天然形态即基准。</summary>
-    Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct);
+    Task PooledInsertAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => throw new NotSupportedException(
+            "写路径池化租还组仅 PerfHub 采集（PERF-5.2）；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>池化单行 UPDATE（租出 → 写 → 归还）。</summary>
-    Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct);
+    Task PooledUpdateAsync(DbConnection conn, S1Row row, CancellationToken ct)
+        => throw new NotSupportedException(
+            "写路径池化租还组仅 PerfHub 采集（PERF-5.2）；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>池化批量插入（一次租期写整批）。</summary>
-    Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct);
+    Task<long> PooledBulkInsertAsync(DbConnection conn, IReadOnlyList<S1Row> rows, CancellationToken ct)
+        => throw new NotSupportedException(
+            "写路径池化租还组仅 PerfHub 采集（PERF-5.2）；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>长会话循环直查（GetByKeySession 项）——单会话内循环 N 次按键直查并返回命中数。
     /// N 固定 32（覆盖 A9 晋升阈值 3 且摊销会话构造）；三臂契约：ADO 命令复用、Dapper 无状态
     /// 循环、PalORM 单 DataSession（A9 复用槽生效）——"推荐用法"的对照面（step13 §6.2 挂账）。</summary>
@@ -59,20 +65,27 @@ internal interface IPerfImplementation
     Task<long> CountAsync(DbConnection conn, CancellationToken ct);
 
     // ── 生命周期与存在性（2026-11-06 新增四项 API 的对照面）──
+    // 采集面=PerfHub 五项对照（三方言）；CrossBench 对照臂不实现（横评 17 操作不采集），
+    // 未实现者经默认实现显式拒绝，防静默空转绿。
     /// <summary>存在性判断。PalORM 走 <c>AnyAsync</c>（SELECT 1 … LIMIT 1 命中即短路），
     /// 另外两臂写等价 SQL。</summary>
-    Task<bool> AnyAsync(DbConnection conn, CancellationToken ct);
+    Task<bool> AnyAsync(DbConnection conn, CancellationToken ct)
+        => throw new NotSupportedException("生命周期对照组仅 PerfHub 采集；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>条件删除单语句（DELETE … WHERE name = @p），返回受影响行数。
     /// 与 PalORM 的 <c>ExecuteDeleteAsync</c> 同语义；两臂手写 SQL。条件列取 perf_soft 的
     /// 小写 name（PG 标识符大小写敏感，全小写让三臂写同一段不带引号的 SQL）。</summary>
-    Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct);
+    Task<int> DeleteWhereAsync(DbConnection conn, string name, CancellationToken ct)
+        => throw new NotSupportedException("生命周期对照组仅 PerfHub 采集；CrossBench 对照臂不实现、横评 17 操作不采集。");
 
     /// <summary>单行软删（UPDATE deleted_at）——HardDelete 与 Restore 的对照基线。</summary>
-    Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct);
+    Task<int> SoftDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => throw new NotSupportedException("生命周期对照组仅 PerfHub 采集；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>恢复软删行（UPDATE deleted_at = NULL）。</summary>
-    Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct);
+    Task<int> RestoreAsync(DbConnection conn, long id, CancellationToken ct)
+        => throw new NotSupportedException("生命周期对照组仅 PerfHub 采集；CrossBench 对照臂不实现、横评 17 操作不采集。");
     /// <summary>物理删除单行，绕过软删改写。</summary>
-    Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct);
+    Task<int> HardDeleteAsync(DbConnection conn, long id, CancellationToken ct)
+        => throw new NotSupportedException("生命周期对照组仅 PerfHub 采集；CrossBench 对照臂不实现、横评 17 操作不采集。");
 
     // ── 阶段 2 新增（v2 方案 §2 #11/12/16/17）──
     /// <summary>批量 UPSERT（方言：ON CONFLICT / ON DUPLICATE KEY）。</summary>
