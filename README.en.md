@@ -46,7 +46,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 
 ## 🆚 Comparison with mainstream ORMs
 
-> Versions (verified 2026-10-26): PalORM 6.8.0 · Dapper 2.1.89 + Dapper.AOT 1.1.0 · EF Core 10.0.14 · RepoDb 1.17.0.
+> Versions (verified 2026-11-22): PalORM 6.9.0 · Dapper 2.1.100 + Dapper.AOT 1.1.0 · EF Core 10.0.14 · RepoDb 1.17.0.
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
@@ -71,7 +71,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 
 What matters for AOT is how each library replaces runtime reflection: **compile-time source generation** (PalORM, Dapper.AOT), **expression interpretation + trimming annotations** (RepoDb), **runtime building with optional pre-generation** (EF Core), **runtime reflection with no adaptation** (FreeSql).
 
-| Dimension&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | PalORM 6.8.0                                                                                                                                           | Dapper.AOT 1.1.0                                                                                                                                                                                                                                                             | RepoDb 1.17.0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                         | EF Core 10.0.14&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                                                       | FreeSql 3.5.311                                                                                                                                                                              |
+| Dimension&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | PalORM 6.9.0                                                                                                                                           | Dapper.AOT 1.1.0                                                                                                                                                                                                                                                             | RepoDb 1.17.0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                         | EF Core 10.0.14&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                                                       | FreeSql 3.5.311                                                                                                                                                                              |
 |-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Implementation approach** | Compile-time source generation, zero runtime reflection | Source generation + interceptors replacing call sites | Runtime expression trees, interpreted under AOT | Runtime expression-tree compilation + model building | Runtime reflection, no AOT adaptation |
 | **AOT support level** | ✅ **Full**: three-dialect publish passes, zero IL warnings, 4 CI gates | 🟦 **High**: core APIs generated, explicit opt-in | 🟨 **Medium**: regular entities and LINQ work | 🟧 **Low**: Compiled Model + precompiled queries, experimental | 🟥 **None**: zero annotations, no AOT CI, 7 of 9 default-publish projects fail |
@@ -222,7 +222,7 @@ Notes: all 9 groups come from a single batch, so ratios are only comparable with
 > `.NET 11` (every package targets `net11.0` only) + SDK version pinned by `global.json` (currently `11.0.100-rc.3.26522.148`); the IDE must support Roslyn source generators. Native AOT publish additionally needs about 4 GB of memory (ILC compile time, not runtime).
 
 ```xml
-<PackageReference Include="PalORM.PostgreSql" Version="6.8.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->
+<PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->
 ```
 
 The package brings `PalORM.Core` and `PalORM.SourceGen`; five steps below, full patterns and decision tables in [Best practices](docs/最佳实践.md).
