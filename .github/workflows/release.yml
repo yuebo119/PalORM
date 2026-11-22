@@ -38,6 +38,7 @@ jobs:
         environment: production
         permissions:
             contents: write # 用于创建 GitHub Release
+            id-token: write # Trusted Publishing（OIDC）：NuGet/login@v1 凭 GitHub OIDC 令牌换取短效 NuGet API key（2026-11-23 接入，替代过期退役的静态 NUGET_API_KEY）
         services:
             postgres:
                 image: postgres:18
@@ -153,12 +154,23 @@ jobs:
                   fi
                   ls -la artifacts/packages/
 
+            - name: NuGet login (OIDC)
+              # Trusted Publishing：凭 job 的 OIDC 令牌（id-token: write）向 nuget.org
+              # 换取 1 小时短效 API key；nuget.org 侧需有匹配的 Trusted Publishing
+              # policy（owner/repo/workflow 文件名/environment，见发布规范 §6.4）。
+              # NUGET_USER = nuget.org 的 profile 用户名（非邮箱），存于 production
+              # environment secret。
+              id: login
+              uses: NuGet/login@v1
+              with:
+                  user: ${{ secrets.NUGET_USER }}
+
             - name: Push to NuGet.org
-              # M1-2：密钥经 env 注入而非命令行内联——run: 内联会进入 shell 进程参数表
-              # （进程枚举/崩溃回显可读）。完整 OIDC（trusted publishing，免静态 key）
-              # 需在 NuGet.org 侧配置后切换 dotnet nuget push 的 --api-key 省略形态。
+              # 密钥经 env 注入而非命令行内联——run: 内联会进入 shell 进程参数表
+              # （进程枚举/崩溃回显可读）。key 来自上一步 OIDC 交换的短效令牌，
+              # 1 小时有效，登录步紧邻 push 步。
               env:
-                  NUGET_KEY: ${{ secrets.NUGET_API_KEY }}
+                  NUGET_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
               run: >-
                   dotnet nuget push "artifacts/packages/*.nupkg"
                   --source https://api.nuget.org/v3/index.json
