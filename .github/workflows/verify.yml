@@ -338,8 +338,23 @@ jobs:
             # 摊薄到 74.33 的教训）。白名单：注释行 / .g.cs / test·tools·scripts·docs。
             # 探针已验证双向可判（新增 12 行未覆盖 → exit 1；只改注释 → exit 0）。
             - name: Assert diff coverage floor (T1-diff)
+              env:
+                  BEFORE_SHA: ${{ github.event.before }}
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
               run: |
-                  base="${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}"
+                  # tag push 事件的 before 恒为全零（2026-11-22 v6.9.0 实测：release.yml
+                  # 经 workflow_call 复用本 job，全零进 git diff 直接 exit 128）。判定
+                  # 阶梯对齐 gate 步：PR base → 非 0 before → origin/main。
+                  # 全零用 printf 构造，40 位连续零会命中 secret-guard 身份证号规则。
+                  ZERO_SHA=$(printf '%040d' 0)
+                  if [ -n "$BASE_SHA" ]; then
+                    base="$BASE_SHA"
+                  elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "$ZERO_SHA" ]; then
+                    base="$BEFORE_SHA"
+                  else
+                    base="origin/main"
+                  fi
+                  echo "T1-diff base=$base"
                   dotnet run --file scripts/diff-coverage.cs -- "$base" HEAD cov-core.xml cov-integration.xml
 
     gate:
