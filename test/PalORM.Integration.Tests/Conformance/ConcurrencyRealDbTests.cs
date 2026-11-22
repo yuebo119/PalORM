@@ -194,7 +194,7 @@ public sealed class ConcurrencyRealDbTests
             var firstRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var secondRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            async Task<Exception?> RunAsync(
+            static async Task<Exception?> RunAsync(
                 DataSession<PostgreSqlProvider> session, long newId, TaskCompletionSource own, TaskCompletionSource other)
             {
                 try

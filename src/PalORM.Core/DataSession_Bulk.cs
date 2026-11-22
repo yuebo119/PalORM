@@ -2776,7 +2776,7 @@ public partial class DataSession<TProvider>
     /// 更新它等于把行搬到别的租户）。<paramref name="excludeTenantColumn"/> 取实体能力
     /// （编译期常量），不是会话态；缓存键 (Type, Dialect) 因此完备。
     /// MySQL 用 VALUES(c) 形态（与单行 upsert 的既有生成 SQL 一致）。</summary>
-    private UpsertSqlShape BuildUpsertSqlShape(
+    private static UpsertSqlShape BuildUpsertSqlShape(
         Type entityType, string tableName, CrudMetadata metadata, string pkColumn,
         bool excludeTenantColumn)
     {
@@ -2793,7 +2793,7 @@ public partial class DataSession<TProvider>
         if (DataSessionCache.UpsertShapeCache.TryGetValue(shapeKey, out (string QuotedColumns, string ConflictClause) cached))
             return new UpsertSqlShape(quotedTableName, cached.QuotedColumns, cached.ConflictClause);
 
-        string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
+        static string quote(string identifier) => TProvider.QuoteIdentifier(identifier);
         List<string> updateColumns =
         [
             .. metadata.UpsertColumns.Where(c => !string.Equals(c, pkColumn, StringComparison.Ordinal)

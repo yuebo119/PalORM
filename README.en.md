@@ -324,9 +324,9 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // environment var
 
 | Database | Verified | Driver | Floor |
 | --- | --- | --- | --- |
-| PostgreSQL | **18.6** (CI `postgres:18`) | Npgsql 10.0.3 | none; bulk writes need 9.3+, JSONB path queries 9.4+, advisory locks 9.5+ |
-| MySQL | **8.4.11** (CI `mysql:8.4`) | MySqlConnector 2.6.2 | **8.0.19** (`UPDATE JOIN VALUES ROW`; older falls back to CASE WHEN); below 8.0 unsupported |
-| SQLite | **3.54.0** (SQLite3MC 2.6.1) | Microsoft.Data.Sqlite.Core 11.0.0-rc.2 | **3.35+** (`INSERT ... RETURNING`; bulk delete `json_each` needs 3.38+) |
+| PostgreSQL | **18.6** (CI `postgres:18`) | Npgsql 11.0.0 | none; bulk writes need 9.3+, JSONB path queries 9.4+, advisory locks 9.5+ |
+| MySQL | **8.4.11** (CI `mysql:8.4`) | MySqlConnector 3.0.0 | **8.0.19** (`UPDATE JOIN VALUES ROW`; older falls back to CASE WHEN); below 8.0 unsupported |
+| SQLite | **3.54.1** (SQLite3MC 2.7.1) | Microsoft.Data.Sqlite.Core 11.0.0 | **3.35+** (`INSERT ... RETURNING`; bulk delete `json_each` needs 3.38+) |
 
 > Verified versions are what CI runs; floors are syntax limits visible in the source. Build and benchmark environment: see [CONTRIBUTING.md](CONTRIBUTING.md).
 

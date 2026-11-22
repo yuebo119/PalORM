@@ -232,7 +232,13 @@ public sealed class TypeFidelityMatrixTests
     private static bool Matches(Exception error, string marker)
         => marker.Split('|').Any(m =>
             error.GetType().Name.Contains(m, StringComparison.Ordinal)
-            || error.Message.Contains(m, StringComparison.Ordinal));
+            || error.Message.Contains(m, StringComparison.Ordinal)
+            // Npgsql 11 起绑定期拒绝统一包 InvalidCastException，原始拒绝理由（如
+            // ArgumentException）在内层异常——marker 表登记的是方言契约的理由，
+            // 穿透一层包装匹配内层类型名与消息。
+            || (error.InnerException is Exception inner
+                && (inner.GetType().Name.Contains(m, StringComparison.Ordinal)
+                    || inner.Message.Contains(m, StringComparison.Ordinal))));
 
     private static async Task DeleteAsync<TProvider>(DataSession<TProvider> db)
         where TProvider : IDbProvider
@@ -249,7 +255,8 @@ public sealed class TypeFidelityMatrixTests
     {
         if (IsPg(dialect))
         {
-            // Npgsql 契约：timestamptz 只接受 Utc / offset 0（客户端拒绝，ArgumentException）。
+            // Npgsql 契约：timestamptz 只接受 Utc / offset 0（客户端拒绝；Npgsql 11 起该
+            // 拒绝由 ArgumentException 改为包 InvalidCastException，Matches 穿透内层匹配）。
             if (c.Dt.Kind != DateTimeKind.Utc) return new(true, "ArgumentException", null);
             if (c.Dto.Offset != TimeSpan.Zero) return new(true, "ArgumentException", null);
             // Npgsql 默认把 DateTime.MinValue/MaxValue 映射为 PG 的 ±infinity，读回 Kind=Unspecified。

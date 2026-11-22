@@ -372,9 +372,9 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 | 数据库     | 已验证版本                    | 驱动                                   | 硬门槛                                                                     |
 | ---------- | ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------- |
-| PostgreSQL | **18.6**（CI `postgres:18`）  | Npgsql 10.0.3                          | 未设；批量写需 9.3+，JSONB 路径查询 9.4+，咨询锁 9.5+                      |
-| MySQL      | **8.4.11**（CI `mysql:8.4`）  | MySqlConnector 2.6.2                   | **8.0.19**（`UPDATE JOIN VALUES ROW`，更低回退 CASE WHEN）；8.0 以下不支持 |
-| SQLite     | **3.54.0**（SQLite3MC 2.6.1） | Microsoft.Data.Sqlite.Core 11.0.0-rc.2 | **3.35+**（`INSERT ... RETURNING`；批删 `json_each` 需 3.38+）             |
+| PostgreSQL | **18.6**（CI `postgres:18`）  | Npgsql 11.0.0                          | 未设；批量写需 9.3+，JSONB 路径查询 9.4+，咨询锁 9.5+                      |
+| MySQL      | **8.4.11**（CI `mysql:8.4`）  | MySqlConnector 3.0.0                   | **8.0.19**（`UPDATE JOIN VALUES ROW`，更低回退 CASE WHEN）；8.0 以下不支持 |
+| SQLite     | **3.54.1**（SQLite3MC 2.7.1） | Microsoft.Data.Sqlite.Core 11.0.0      | **3.35+**（`INSERT ... RETURNING`；批删 `json_each` 需 3.38+）             |
 
 > 已验证版本为 CI 实测；门槛是源码可查的语法下限。构建与基准环境见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

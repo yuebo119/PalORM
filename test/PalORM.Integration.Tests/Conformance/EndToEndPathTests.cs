@@ -95,7 +95,7 @@ public sealed class EndToEndPathTests
         await target.Session.BulkInsertAsync(read);
         List<CfBulkPlainEntity> migrated = await target.Session.GetAllAsync<CfBulkPlainEntity>();
 
-        string Render(IEnumerable<CfBulkPlainEntity> rows)
+        static string Render(IEnumerable<CfBulkPlainEntity> rows)
             => string.Join("|", rows.OrderBy(r => r.Id).Select(r => $"{r.Id}:{r.Name}:{r.Amount}"));
 
         await Assert.That(migrated.Count).IsEqualTo(original.Length);

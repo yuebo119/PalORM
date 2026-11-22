@@ -30,6 +30,7 @@
 - **构建期守卫补齐**：数组形态 `WhereIn` 补绑定参数上限守卫（与 `AddInClause` 同型）；`DELETE` 复用 `HasIgnoredExecutionModifiers`，拒绝 `Select`/`WithCache`/`AsSplitQuery`（原只查 Take/Skip，这三个会被静默丢弃并扩大影响面）。
 - **超时归一异常打基础设施标记**：归一化的 `TimeoutException` 带 `PalORM.InfrastructureTimeout` 标记，调用方据此归入熔断；超时解包不再误伤 `OperationCanceledException`（取消异常保持原类型传播）。
 - **`ExecuteDeleteAsync` 软删条件恒保留**：`IgnoreFilters` 下与 `DeleteAsync` 同语义（软删实体改写为 `UPDATE deleted_at`）。
+- **依赖升级**：SDK 11.0.100 GA、Npgsql 11.0.0、MySqlConnector 3.0.0（MAJOR）、Microsoft.Data.Sqlite.Core 11.0.0 GA、SQLite3MC 2.7.1（引擎 3.54.0→3.54.1）、Roslyn 5.12.0、TUnit 1.87.12、SonarAnalyzer 10.37、SourceLink 11.0.100、Dapper 2.1.100。产品代码零改动——两个驱动 MAJOR 的破坏性变更经源码与官方 release notes 逐条核实对本仓不触及（MySqlConnector 3.0：BulkCopy 内部包装走 `GetValue` 拉行、事务为自管理 `DbTransaction` 且 `AutoEnlist=false` 无 XA 路径、`information_schema` 只读 string 列；Npgsql 11：不用 DataSourceBuilder/DI、未启用 multiplexing、无大对象 API）。唯一适配在测试层：Npgsql 11 把绑定期拒绝（非 UTC DateTime、非法 DateTimeOffset、编码失败）由裸 `ArgumentException`/`EncoderFallbackException` 改为包 `InvalidCastException` 抛出（内层异常保留），三处测试断言与类型保真矩阵的 marker 匹配随之穿透一层内层异常。〔内部〕
 
 ## [6.8.0] - 2026-10-26
 
