@@ -9,7 +9,7 @@
 // 本脚本为一次性探针工具（真库形态验证），不属于产品 API 面；表名带 probe 前缀
 // 且 finally 自清理，可在共享库上安全运行。
 #:property ManagePackageVersionsCentrally=false
-#:package Npgsql@10.0.3
+#:package Npgsql@11.0.0
 
 using System.Text;
 using Npgsql;

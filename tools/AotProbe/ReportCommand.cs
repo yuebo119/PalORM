@@ -167,7 +167,7 @@ internal static class ReportCommand
     private static GradeInput ToGradeInput(ArmRun main, List<ArmRun> runs)
     {
         ArmRun? jit = runs.FirstOrDefault(r => r.Group == "A" && r.Form == "jit");
-        LayerStat Stat(ArmRun? arm, ProbeLayer l)
+        static LayerStat Stat(ArmRun? arm, ProbeLayer l)
         {
             if (arm is null)
                 return new LayerStat(0, 0);

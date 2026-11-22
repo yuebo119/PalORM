@@ -61,13 +61,15 @@
     <PackageReference Include="FreeSql.Provider.MySqlConnector" Version="3.5.311" />
     <PackageReference Include="FreeSql.Provider.PostgreSQL" Version="3.5.311" />
     
-    <!-- 基础数据访问库 -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
-    <PackageReference Include="SQLite3MC.PCLRaw.bundle" Version="2.6.1" />
-    <PackageReference Include="Dapper" Version="2.1.89" />
+    <!-- 基础数据访问库。2026-11-22 依赖升级轮同步（CPM 之外本工程独立管理版本，
+         ManagePackageVersionsCentrally=false）：升级轮漏了本文件致 CrossBench NU1605
+         包降级冲突（PalORM.Sqlite/PostgreSql/MySql 传新版本、本工程钉旧版本）。 -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="11.0.0" />
+    <PackageReference Include="SQLite3MC.PCLRaw.bundle" Version="2.7.1" />
+    <PackageReference Include="Dapper" Version="2.1.100" />
     <PackageReference Include="Dapper.AOT" Version="1.1.0" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
-    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="Npgsql" Version="11.0.0" />
+    <PackageReference Include="MySqlConnector" Version="3.0.0" />
   </ItemGroup>
 
   <ItemGroup>

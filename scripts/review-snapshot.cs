@@ -67,6 +67,11 @@ if (noBuild)
 }
 else
 {
+    // B207（2026-11-11 登记）：PalORM.slnx 含 bench/PalORM.Benchmarks 与
+    // bench/PalORM.DapperSuite，两者依赖 bench/BenchmarkDotNet（.gitignore 排除，
+    // 不入仓库）——本脚本是 internal API 变更的本地全项目兜底，需本地存在 BDN fork；
+    // CI 的 PalORM.ci.slnf 不含这两个项目（无 BDN fork 会构建失败），故 internal
+    // 变更在 CI 无构建覆盖，靠"改 internal API 前 grep 全树调用点"纪律（B207 规则）。
     var psi = new ProcessStartInfo("dotnet", "build PalORM.slnx -c Release --no-incremental --nologo")
     {
         RedirectStandardOutput = true,

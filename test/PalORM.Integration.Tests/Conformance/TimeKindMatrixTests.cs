@@ -43,7 +43,8 @@ public sealed class TimeKindMatrixTests
         List<CfTimeMatrixEntity> inserted = [];
 
         // 逐行显式调用（非循环）避免 PALORM005。每个 Kind 单独取证：
-        // Npgsql 的 timestamptz 只接受 Utc，Unspecified 与 Local 都会被拒（ArgumentException），
+        // Npgsql 的 timestamptz 只接受 Utc，Unspecified 与 Local 都会被拒
+        // （Npgsql 11 起：InvalidCastException 包内层 ArgumentException），
         // 这是方言契约而非本测试的失败条件。
         string utcOutcome = await TryInsertAsync(db, UtcInput, inserted);
         string unspecifiedOutcome = await TryInsertAsync(db, UnspecifiedInput, inserted);
@@ -76,8 +77,15 @@ public sealed class TimeKindMatrixTests
         }
         catch (ArgumentException)
         {
-            // Npgsql：timestamp with time zone 只接受 Utc。记录方言契约，不当作失败。
+            // Npgsql 10 及更早：timestamp with time zone 只接受 Utc，裸抛 ArgumentException。
+            // 记录方言契约，不当作失败。
             return "rejected:ArgumentException";
+        }
+        catch (InvalidCastException)
+        {
+            // Npgsql 11 起同样的 Kind 拒绝改为包 InvalidCastException 抛出
+            // （内层 ArgumentException 保留）。记录方言契约，不当作失败。
+            return "rejected:InvalidCastException";
         }
     }
 

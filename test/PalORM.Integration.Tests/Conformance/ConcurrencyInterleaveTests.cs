@@ -24,9 +24,9 @@ public sealed class ConcurrencyInterleaveTests
         if (rows.Count != expectedCount)
             differences.Add($"行数 {rows.Count}，期望 {expectedCount}");
 
-        string MarkerOf(IReadOnlyDictionary<string, object?> row)
+        static string MarkerOf(IReadOnlyDictionary<string, object?> row)
             => Convert.ToString(row["marker"], CultureInfo.InvariantCulture) ?? "";
-        long IdOf(IReadOnlyDictionary<string, object?> row)
+        static long IdOf(IReadOnlyDictionary<string, object?> row)
             => Convert.ToInt64(row["id"], CultureInfo.InvariantCulture);
 
         IReadOnlyDictionary<string, object?>? newRow = rows.FirstOrDefault(r => IdOf(r) == 2);

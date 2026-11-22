@@ -6,21 +6,30 @@
 
   <!-- ADO.NET Providers -->
   <ItemGroup>
-    <!-- 2026-10-19 依赖升级轮：rc.1.26425.128 → rc.2.26504.105（NuGet 平面索引确认 rc.2 为
-         .NET 11 包线最新版）。2026-11-09：global.json SDK 已升 rc.3.26522.148（工具线），
-         包线保持 rc.2——两者分属 NuGet 包与 SDK 两条版本线，无需同轨。 -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
-    <!-- 2026-10-14 依赖升级轮：SQLite3MC 2.4.0→2.6.1（引擎升 SQLite 3.54.0；chacha20/poly1305
-         硬件加速、临时文件加密与新 pragma，与本仓使用面（Batteries_V2.Init + 标准 SQL）零交集，
-         无初始化 API 变更）。2026-10-19 复核：2.6.1 仍为最新稳定版。 -->
-    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.6.1" />
-    <!-- v5.0 阶段 2.2：Npgsql 9.0.3→10.0.3。破坏性变更（date/time 默认映射 DateOnly/TimeOnly）
-         仅影响 GetValue/ExecuteScalar 路径；RowFactoryEmitter 全部用 GetDateTime/GetFieldValue<T>，
-         经源码核实 v10 仍返回 DateTime/TimeSpan，零代码改动。 -->
-    <PackageVersion Include="Npgsql" Version="10.0.3" />
-    <!-- v5.0 阶段 2.1：MySqlConnector 2.4.0→2.6.1（含安全修复 GHSA-473q-m89c-ghf8）；
-         现为 2.6.2（安全修复延续，README 驱动表同口径）。破坏性变更（State=Broken / DI 命名空间迁移）对本项目零影响（见调研报告）。 -->
-    <PackageVersion Include="MySqlConnector" Version="2.6.2" />
+    <!-- 2026-11-22 依赖升级轮：rc.2.26504.105 → 11.0.0 GA（.NET 11 GA 已发布，包线升 GA；
+         global.json SDK 同轮升 11.0.100 GA，包线与工具线首次同轨 GA）。rc→GA 同版本线，
+         仅移除 prerelease 限制。 -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0" />
+    <!-- 2026-11-22 依赖升级轮：2.6.1→2.7.1（引擎小版本；先例 2026-10-14 轮与本仓使用面
+         Batteries_V2.Init + 标准 SQL 零交集，无初始化 API 变更）。 -->
+    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.7.1" />
+    <!-- 2026-11-22 依赖升级轮：10.0.3→11.0.0（.NET 11 GA 线）。官方 release notes 四条破坏性
+         变更（DependencyInjection 包并入主包、实验性 multiplexing 模式移除、Npgsql 8.0 起废弃的
+         LargeObject API 移除、池指标标签从连接串改 Application Name）对本项目零触及——
+         不用 NpgsqlDataSourceBuilder/DI 注入、未启用 multiplexing、无大对象 API、无池指标消费。
+         先例 v9→v10（date/time 映射变更）已核实 RowFactoryEmitter 全用 GetDateTime/GetFieldValue<T>，
+         v11 release notes 无返回类型变更。 -->
+    <PackageVersion Include="Npgsql" Version="11.0.0" />
+    <!-- 2026-11-22 依赖升级轮：2.6.2→3.0.0（MAJOR）。官方版本历史 Breaking/Possibly Breaking
+         逐条核查，三条疑面源码排除：①Binary16 GuidFormat 下 VARBINARY(16) 不再读为 Guid——
+         EntityDataReader 仅服务 MySqlBulkCopy 且实测走 GetValue 拉行（EntityDataReader.cs:131），
+         byte[] 直写 VARBINARY(16) 等价；产品读路径走驱动 GetGuid 由驱动自转换，默认 Char36 形态
+         不受影响。②XA 事务隔离级别变更——RunInTransactionScopeAsync 为自管理 DbTransaction
+         （非 System.Transactions）且 MySqlProvider 显式 AutoEnlist=false，无 XA 参与路径。
+         ③tables schema 列 long→ulong——本仓 information_schema 查询只 GetString 取表名列名。
+         OTel 实验性语义约定移除（grep SemanticConvention/db.statement 零命中）与目标框架移除
+         （net8.0 起步）均无影响。零代码适配。 -->
+    <PackageVersion Include="MySqlConnector" Version="3.0.0" />
   </ItemGroup>
 
   <!-- 基础依赖 (BCL 自带，无需 NuGet 引用) -->
@@ -28,14 +37,11 @@
 
   <!-- 源生成器 -->
   <ItemGroup>
-    <!-- 2026-09-10 升 5.6.0→5.9.0（r21 依赖升级轮）：解析验证通过（nuget.org/dotnet-tools
-         双源均可达，5.6.0 时"dotnet-tools 无 stable"的源约束已过时——packageSourceMapping
-         现允许双源）。升级验证：SourceGen 188 测试（含 13 份快照字节级对比）+
-         全量 -warnaserror 构建全绿。 -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
-    <!-- 2026-10-19 复核：5.9.0 为最新稳定版；NuGet 上 5.13.0-1.26516.101 为预览版，
-         分析器与 SDK 编译器版本兼容优先，不采用预览。 -->
+    <!-- 2026-11-22 依赖升级轮：5.9.0→5.12.0（stable 线，5.13.0-1 仍为预览不采用）。
+         先例验证方式：SourceGen 188 测试（含 13 份快照字节级对比）+ 全量 -warnaserror 构建。
+         运行时兼容：分析器/生成器宿主 Roslyn 版本由 SDK 11.0.100 GA 提供，随本轮构建验证。 -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.12.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.12.0" />
   </ItemGroup>
 
   <!-- 测试 -->
@@ -45,9 +51,10 @@
          2026-10-11 依赖升级轮：1.73.5→1.73.19（patch 流，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
          2026-10-14 依赖升级轮：1.73.19→1.74.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。
          2026-10-19 依赖升级轮：1.74.0→1.75.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
-    <!-- 2026-10-22 依赖升级轮：1.75.0→1.76.0（minor，测试框架）——升后 ci.slnf 构建 + 三测试套全量验证。 -->
-    <PackageVersion Include="TUnit" Version="1.76.0" />
-    <PackageVersion Include="TUnit.Assertions" Version="1.76.0" />
+    <!-- 2026-11-22 依赖升级轮：1.76.0→1.87.12（跨 11 个 minor，测试框架）——
+         升后 ci.slnf 构建 + 三测试套全量验证。 -->
+    <PackageVersion Include="TUnit" Version="1.87.12" />
+    <PackageVersion Include="TUnit.Assertions" Version="1.87.12" />
     <!-- v5.0 阶段 1.3：移除 Microsoft.NET.Test.Sdk——TUnit 1.x 走 MTP 模式，
          dotnet run 直接执行，不再需要 VSTest 桥接（dotnet test 入口）。 -->
   </ItemGroup>
@@ -57,10 +64,10 @@
     <!-- v5.0 阶段 3.4：BenchmarkDotNet 从 NuGet 0.15.8 改为本地 ProjectReference（fork 已支持 net11）。
          删除此处的 PackageVersion，避免 NuGet 把旧包带回来覆盖 ProjectReference。
          PalORM.Benchmarks.csproj 直接 ProjectReference 引用 bench/BenchmarkDotNet。 -->
-    <!-- 2026-09-24 依赖升级轮：Dapper 2.1.79→2.1.89（patch）、Dapper.AOT 1.0.52→1.1.0（minor）。
+    <!-- 2026-11-22 依赖升级轮：Dapper 2.1.89→2.1.100（patch 流）。
          口径注记：Dapper 是三臂对照的外部锚点——版本变化会让 PerfHub/DapperSuite 的 Dapper 臂数字
          与历史批次漂移，下次全量跑测起 P/Dapper 列跨批不直接可比（批内三臂仍同批可比）。 -->
-    <PackageVersion Include="Dapper" Version="2.1.89" />
+    <PackageVersion Include="Dapper" Version="2.1.100" />
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- 同类 micro-ORM 对照（Dapper 官方 benchmarks/ 同样多 ORM 对照）。
          2026-10-23 依赖升级轮：1.16.0→1.17.0（minor，两包同版本号）——新增 DuckDB/CockroachDB/
@@ -82,15 +89,16 @@
 
   <!-- 质量分析器（v3.0：CI 守护层——让 SonarLint IDE 报告与 CI 编译错误对齐） -->
   <ItemGroup>
-    <!-- 2026-09-29 依赖升级轮：10.34.0.3385→10.35.0.4138——升后 ci.slnf 严格构建全绿。 -->
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
+    <!-- 2026-11-22 依赖升级轮：10.35.0.4138→10.37.0.15768——升后 ci.slnf 严格构建全绿
+         （-warnaserror 下新规则若有命中会在构建期现形）。 -->
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.37.0.15768" />
   </ItemGroup>
 
   <!-- SourceLink（v5.0 发布管道：NuGet.org 包页源码链接 + F12 步入）。
-       2026-08-15 升 8.0.0→10.0.400：源兼容性随本次全量升级验证（build 0 警告）。 -->
+       2026-11-22 依赖升级轮：10.0.402→11.0.100 GA（当时预览线 11.0.100-rc.2 已转 GA，
+       与 SDK 11.0.100 同线）。源兼容性随本轮全量升级验证（build 0 警告）。 -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.402" />
-    <!-- 2026-10-19 复核：10.0.402 为最新稳定版；11.0.100-rc.2 属 SDK 预览线，不采用。 -->
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="11.0.100" />
   </ItemGroup>
 
   <!-- 传递依赖稳定版固定（CentralPackageTransitivePinningEnabled）——2026-10-19 依赖升级轮：
