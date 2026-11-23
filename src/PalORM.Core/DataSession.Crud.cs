@@ -1096,7 +1096,8 @@ public sealed partial class DataSession<TProvider>
     /// <summary>物理删除单行，绕过 [SoftDelete] 的软删改写。
     /// <para><b>与 DeleteAsync 的分工</b>：DeleteAsync 对软删实体执行逻辑删除；本方法执行真实
     /// DELETE，用于数据清理与合规删除。不可恢复，故不设默认参数，调用即明示。</para>
-    /// <para>租户实体会追加租户条件，只能删除会话当前租户的行。性能与非软删实体的
+    /// <para>租户实体会追加租户条件；<see cref="IgnoreFilters"/> 会话下该条件不追加
+    /// （DEC-1/ADR-X 裁决 A：写路径同样放开，这是唯一跨租户运维出口）。性能与非软删实体的
     /// DeleteAsync 逐指令等价（同一条物理删除路径）。</para></summary>
     public async ValueTask<int> HardDeleteAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
@@ -1112,7 +1113,8 @@ public sealed partial class DataSession<TProvider>
     /// <summary>恢复软删行（UPDATE deleted_at = NULL）。
     /// <para>仅对 [SoftDelete] 实体有效，非软删实体没有 deleted_at 列。重复恢复返回 0 行
     /// （WHERE 要求 deleted_at IS NOT NULL），与软删 DeleteAsync 的幂等语义对称。</para>
-    /// <para>租户实体追加租户条件，只能恢复会话当前租户的行。稳态零托管分配：SQL 走 2 槽静态
+    /// <para>租户实体追加租户条件；<see cref="IgnoreFilters"/> 会话下不追加（同 HardDeleteAsync，
+    /// 裁决 A 的写侧放开）。稳态零托管分配：SQL 走 2 槽静态
     /// 缓存；低频操作不建命令复用槽（Lessons B98：摊销不掉槽检查成本）。</para></summary>
     public async ValueTask<int> RestoreAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()

@@ -14,7 +14,7 @@
 | [ADR-D](ADR-D-多程序集实体布局.md) | 多程序集实体布局的官方支持范围 | 已裁决 D3（降级告警，2026-09-02 追认实施） | 2026-07-18 评审 ITM-420 |
 | [ADR-E](ADR-E-dbdatasource-单例化取舍.md) | DbDataSource 单例化取舍 | 已批准 E1（不做） | v5.0-roadmap 阶段 4.1，2026-07-25 用户裁决 |
 | [ADR-F](ADR-F-auto-tagging-interceptor.md) | Auto Tagging Interceptor | 已批准 | v5.1 Auto Tagging 特性，2026-07-28 实施完成 |
-| [ADR-G](ADR-G-mysql-allowloadlocalinfile-安全策略.md) | MySQL AllowLoadLocalInfile 安全策略 | 已裁决 | 2026-08-15 评审 ITM-612/EVAL-1 |
+| [ADR-G](ADR-G-mysql-allowloadlocalinfile-安全策略.md) | MySQL AllowLoadLocalInfile 安全策略 | 已修订（2026-11-24 显式意图优先） | 2026-08-15 评审 ITM-612/EVAL-1；PROV-001 后落地 |
 | [ADR-H](ADR-H-irowfactory-接口处置.md) | IRowFactory 接口处置 | 已裁决 | 2026-08-15 评审 ITM-640/EVAL-2 |
 | [ADR-I](ADR-I-legacy-commandsqls-移除窗口.md) | legacy CommandSqls 双份生成的移除窗口 | 已修订（2026-09-02 提前实施） | 2026-08-15 评审 ITM-640/EVAL-3 |
 | [ADR-J](ADR-J-legacy-createtablesql-双轨收敛.md) | legacy CreateTableSql 双轨收敛 | 已裁决并实施 | 2026-09-02 架构评审第二批（同 ADR-I 模板） |

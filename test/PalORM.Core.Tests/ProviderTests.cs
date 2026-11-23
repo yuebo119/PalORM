@@ -154,6 +154,29 @@ public sealed class ProviderTests
         await Assert.That(mysql.ConnectionString).Contains("Connection Lifetime=300");
     }
 
+    /// <summary>ADR-G 修订（2026-11-24）锁定：显式 AllowLoadLocalInfile=false 不再被改写。
+    /// 未表态时仍提升为 true（BulkCopy 前提）；显式 true 原样保留。
+    /// 键名形态由实测钉住：builder.Keys 返回规范化 "Allow Load Local Infile"（带空格）。</summary>
+    [Test]
+    public async Task MySqlProvider_PreservesExplicitAllowLoadLocalInfile()
+    {
+        var options = new DbOptions { ConnectionString = "x" };
+
+        await using var explicitFalse = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test;AllowLoadLocalInfile=false", options);
+        await Assert.That(explicitFalse.ConnectionString).Contains("Allow Load Local Infile=False")
+            .Because("显式关闭是安全加固意图（恶意服务端读客户端文件），不得被改写");
+
+        await using var unspecified = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", options);
+        await Assert.That(unspecified.ConnectionString).Contains("Allow Load Local Infile=True")
+            .Because("未表态时提升以保证 BulkCopy 可用");
+
+        await using var explicitTrue = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test;AllowLoadLocalInfile=true", options);
+        await Assert.That(explicitTrue.ConnectionString).Contains("Allow Load Local Infile=True");
+    }
+
     [Test]
     public async Task ProviderConnectionFactories_ApplyMinPoolSizeOnlyWhenConfigured()
     {
