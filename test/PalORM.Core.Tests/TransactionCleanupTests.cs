@@ -69,20 +69,20 @@ public sealed class TransactionCleanupTests
     }
 
     [Test]
-    public async Task DialectFreeVariant_TransportFailure_IsRolledBack()
+    public async Task NetworkDialectVariant_TransportFailure_IsRolledBack()
     {
-        // 多值骨架不带方言信息，只按异常形态裁决
+        // 网络方言（PG/MySQL 共用语义）：只按异常形态裁决，传输类失败必须回滚
         var primary = new OperationCanceledException();
-        await Assert.That(TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(primary))
-            .IsFalse();
+        await Assert.That(TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+            SqlDialect.PostgreSql, primary)).IsFalse();
     }
 
     [Test]
-    public async Task DialectFreeVariant_ServerError_IsSkipped()
+    public async Task NetworkDialectVariant_ServerError_IsSkipped()
     {
         var primary = new InvalidOperationException("deadlock detected");
-        await Assert.That(TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(primary))
-            .IsTrue();
+        await Assert.That(TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+            SqlDialect.PostgreSql, primary)).IsTrue();
     }
 
     // ─── R3：回滚有界 ────────────────────────────────

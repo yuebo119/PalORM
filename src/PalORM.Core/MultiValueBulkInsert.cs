@@ -122,11 +122,14 @@ public static class MultiValueBulkInsert
             primaryException = exception;
             // R1/T3：裁决只针对提交失败；批执行失败一律回滚。回滚本身有界
             // （TransactionCleanup.DefaultRollbackTimeoutSeconds）。
-            // BulkContext 不带方言（多值骨架被三 Provider 共享），此处只按异常形态裁决——
-            // 传输类失败在三个方言上都应回滚。
+            // A3（2026-11-24）：方言必须显式声明——无方言版已删除。本骨架当前唯一调用方是
+            // MySqlProvider（PG 走 Binary COPY，SQLite 走 RowPreparedBulkInsert）。若未来新增
+            // 网络方言复用点，在此显式传该方言；SQLite 绝不可走本路径（BUSY 的 COMMIT 失败
+            // 保留活动事务，跳过回滚会让写锁持有到连接释放）。
             if (ownsTransaction
                 && (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                        SqlDialect.MySql, exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     tran, exception, commandTimeoutSeconds, ct: ct).ConfigureAwait(false);

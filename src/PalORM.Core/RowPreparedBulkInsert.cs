@@ -115,10 +115,14 @@ public static class RowPreparedBulkInsert
         catch (Exception exception)
         {
             primaryException = exception;
-            // R1 同族：批执行失败一律回滚；仅 CommitAsync 自身失败走"跳过回滚"裁决
+            // R1 同族：批执行失败一律回滚；仅 CommitAsync 自身失败走"跳过回滚"裁决。
+            // A3（2026-11-24）：裁决按方言分派。本骨架是 SQLite 专用（行预编译形态，仅
+            // SqliteProvider.BulkInsertAsync 调用），无方言版会把 SQLITE_BUSY 的提交失败
+            // 误判为"服务端已终止事务"而跳过回滚，使事务悬置、写锁持有到连接释放。
             if (ownsTransaction
                 && (!commitAttempted
-                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(exception)))
+                    || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
+                        SqlDialect.Sqlite, exception)))
             {
                 await TransactionCleanup.RollbackPreservingAsync(
                     tran, exception, ctx.CommandTimeoutSeconds, ct: ct).ConfigureAwait(false);

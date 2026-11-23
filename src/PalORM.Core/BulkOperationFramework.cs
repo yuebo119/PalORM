@@ -150,13 +150,16 @@ public static class BulkOperationFramework
     }
 
     /// <summary>失败提交后跳过回滚的裁决（ITM-870，r23）——Provider 批量路径（PG COPY / MySQL
-    /// LOAD DATA）的跨程序集入口，与 Core 的 MultiValueBulkInsert 同一语义：<b>服务端返回错误</b>的
-    /// COMMIT 已由服务端终止事务（PG/MySQL 文档口径），后续 RollbackAsync 只会得到
-    /// "transaction already completed" 噪音并多一次徒劳往返；连接类失败（取消/超时/IO）服务端状态
-    /// 未知，照常回滚。返回 true = 已在主异常 Data 标记跳过（调用方不再回滚）。</summary>
+    /// LOAD DATA）的跨程序集入口：<b>服务端返回错误</b>的 COMMIT 已由服务端终止事务（PG/MySQL
+    /// 文档口径），后续 RollbackAsync 只会得到 "transaction already completed" 噪音并多一次徒劳
+    /// 往返；连接类失败（取消/超时/IO）服务端状态未知，照常回滚。
+    /// <para><b>A3（2026-11-24）</b>：只服务网络方言，故固定传 <see cref="SqlDialect.PostgreSql"/>
+    /// ——该参数只用于 SQLite 例外判定（SQLite 恒不跳过），PG 与 MySQL 语义相同。
+    /// 本入口无 SQLite 调用方；SQLite 批量走 <c>RowPreparedBulkInsert</c> 并显式传 Sqlite。</para>
+    /// 返回 true = 已在主异常 Data 标记跳过（调用方不再回滚）。</summary>
     public static bool TrySkipRollbackAfterCommitFailure(Exception primaryException)
     {
         ArgumentNullException.ThrowIfNull(primaryException);
-        return TransactionCleanup.TrySkipRollbackAfterCommitFailureForException(primaryException);
+        return TransactionCleanup.TrySkipRollbackAfterCommitFailure(SqlDialect.PostgreSql, primaryException);
     }
 }

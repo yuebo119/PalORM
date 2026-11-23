@@ -32,16 +32,6 @@ internal static class TransactionCleanup
         return true;
     }
 
-    /// <summary>只按异常形态裁决、不带方言的变体——供多方言共享骨架（<see cref="MultiValueBulkInsert"/>）
-    /// 使用：传输类失败一律回滚，服务端错误类一律跳过。</summary>
-    internal static bool TrySkipRollbackAfterCommitFailureForException(Exception primaryException)
-    {
-        if (!LooksLikeServerSideCommitError(primaryException)) return false;
-        primaryException.Data[RollbackSkippedDataKey] =
-            "Rollback skipped: CommitAsync failed; the server already terminated the transaction.";
-        return true;
-    }
-
     /// <summary>判定 COMMIT 失败是否"服务端已收到并处理了提交请求"——只有这种形态才敢跳过回滚。
     /// 连接断裂与取消（含超时）下服务端状态未知，必须尝试回滚。判定保守偏向回滚：
     /// 多回滚一次的代价是一次失败往返挂 Data，少回滚的代价是服务端事务悬置。</summary>
