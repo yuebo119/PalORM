@@ -92,6 +92,23 @@ internal sealed class CompiledQueryTests
         await Assert.That(afterRollback.Count).IsEqualTo(0);
     }
 
+    /// <summary>契约 ⑤ 的锁定（2026-11-24 补）：计划持有会话主连接与唯一的命令/参数数组，
+    /// 并行读作用域会让两个并发执行互相覆盖参数值；原先只有 XML 文档声明，无运行期守卫。</summary>
+    [Test]
+    public async Task Execute_InsideParallelReadScope_Throws()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+        await SeedAsync(session);
+        using CompiledQuery<CompiledRow, SqliteProvider> plan = session.Compile<CompiledRow>(
+            "SELECT id, name FROM compiled_rows WHERE id = @p0", "@p0");
+
+        await using (session.ForParallelReads())
+        {
+            await Assert.That(async () => await plan.ExecuteAsync([1L]))
+                .Throws<InvalidOperationException>();
+        }
+    }
+
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
         => await DataSession<SqliteProvider>.CreateAsync(new DbOptions
         {

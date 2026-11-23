@@ -68,6 +68,13 @@ public sealed class CompiledQuery<T, TProvider> : IDisposable
                 $"Compiled query expects {_parameterNames.Length} parameter value(s) but received {values.Length}.",
                 nameof(values));
 
+        // 契约 ⑤（2026-11-24 补运行期守卫）：计划持有会话主连接与唯一命令/参数数组，
+        // 并行读作用域放行的并发执行会互相覆盖参数值；此前只有文档声明，无拦截。
+        if (_session.CompiledParallelReadsActive)
+            throw new InvalidOperationException(
+                "Compiled queries share the session's primary connection and command; " +
+                "they cannot execute inside a parallel-read scope. Exit the scope first.");
+
         using SessionOperationState.SessionOperationLease operation = _session.EnterReadOnly();
         DbCommand command = EnsureCommand();
         DbTransaction? transaction = _session.CompiledTransaction;
