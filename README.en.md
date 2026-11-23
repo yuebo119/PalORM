@@ -2,7 +2,7 @@
 
 # PalORM
 
-**A .NET 11 micro-ORM for Native AOT: everything generated at compile time, zero reflection at runtime**
+**A .NET 11 micro-ORM for Native AOT: entity CRUD generated at compile time, zero reflection at runtime**
 
 *An AOT-native, compile-time-verifiable micro-ORM with SQL you control*
 
@@ -19,7 +19,7 @@
 
 </div>
 
-A Roslyn source generator produces SQL construction, parameter binding, object mapping, and migration DDL at compile time — zero reflection, zero IL Emit at runtime. PostgreSQL / MySQL / SQLite across three dialects, with enterprise features out of the box: multi-tenancy, optimistic locking, soft delete, auditing, advisory locks, and more.
+A Roslyn source generator produces the SQL, parameter binding, object mapping, and migration DDL for entity CRUD at compile time — zero reflection, zero IL Emit at runtime. Chainable queries build SQL at runtime from their shape (still parameterized, still reflection-free). PostgreSQL / MySQL / SQLite across three dialects, with enterprise features out of the box: multi-tenancy, optimistic locking, soft delete, auditing, advisory locks, and more.
 
 > Detailed docs (in Chinese) live under [docs/](docs/) — [API reference](docs/API参考.md), [architecture](docs/架构设计.md), [AOT deployment guide](docs/AOT部署指南.md), [benchmark methodology](docs/性能基准规范.md).
 
@@ -32,7 +32,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 ## ✨ Features
 
 - **Compile-time generation**: A Roslyn source generator emits RowFactory, CommandFactory, and three-dialect Migration DDL for every `[Table]` entity, plus materializers for `[Projection]` DTOs, with zero runtime reflection and zero IL Emit.
-- **Compile-time safety net**: 46 Roslyn diagnostics catch missing keys, nullable tenant columns bypassing isolation, zero-value optimistic-lock baselines, and loop N+1 queries at build time, with errors jumping to the declaration site.
+- **Compile-time safety net**: 46 Roslyn diagnostics cover missing keys, nullable tenant columns bypassing isolation, zero-value optimistic-lock baselines, and loop N+1 queries. Missing keys and nullable tenant columns are `Error` and block by default; N+1 and the optimistic-lock baseline are `Warning` (this project turns on `TreatWarningsAsErrors`, so they block here too). All but one (the generator-skip case) jump to the declaration site.
 - **Full-pipeline Native AOT**: Publish verification and native execution pass on SQLite, PostgreSQL, and MySQL, and consumers need no TrimmerRootAssembly.
 - **Floor-level performance**: Single-row CRUD matches hand-written ADO.NET, bulk writes automatically take the fastest per-dialect path (PG Binary COPY, MySQL LOAD DATA, SQLite row-prepared batches and json_each bulk delete), and a session pool is built in for request-per-session web services.
 - **Enterprise cross-cutting**: Multi-tenant column isolation, optimistic locking, soft delete, audit interception, read/write splitting, advisory locks, resilient retry, and circuit breaking work out of the box.
@@ -40,9 +40,9 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 - **Operations and observability**: Health checks, a cross-dialect unified exception family, and OpenTelemetry tracing and metrics are built in.
 - **Dialect-specific capabilities**: PostgreSQL gets UNNEST, advisory locks, LISTEN/NOTIFY, pgvector, and JSONB path queries; MySQL gets local_infile degradation and UPDATE JOIN; SQLite gets driver-level AES-256 encryption at rest and automatic PRAGMA tuning.
 - **Schema and seeding**: `MigrateAsync` runs three-dialect DDL in foreign-key topological order, `SeedAsync` seeds idempotently inside a transaction, and `ValidateSchemaAsync` reports missing columns against entity declarations.
-- **Zero-dependency core**: PalORM.Core references no third-party NuGet packages, only BCL and ADO.NET abstractions.
+- **Zero-dependency core**: PalORM.Core has no third-party runtime dependencies; code uses only the BCL, ADO.NET abstractions, and the logging abstraction in the shared framework. Build time adds only SourceLink and SonarAnalyzer (both `PrivateAssets=all`, absent from consumer dependencies).
 
-> **Audit boundary**: `IQueryInterceptor` covers SELECT, QueryBuilder UPDATE, `ExecuteAsync`, and `QueryPipeline`. Entity Insert/Update/Delete/Save, the Bulk family, stored procedures, and multi-result sets bypass interceptors. For write auditing, use database-level auditing or OpenTelemetry.
+> **Audit boundary**: `IQueryInterceptor` covers QueryBuilder SELECT (ToList/First/Single/ForEach/paging), UPDATE and DELETE, plus `DataSession.ExecuteAsync` and `QueryPipeline`. Entity `Get`/`GetAll`/`QueryAsync`/`ScalarAsync`, entity Insert/Update/Delete/Save, the Bulk family, stored procedures, and multi-result sets bypass interceptors. For write auditing, use database-level auditing or OpenTelemetry.
 
 ## 🆚 Comparison with mainstream ORMs
 
@@ -50,9 +50,9 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 
 | Feature | **PalORM** | Dapper | EF Core | RepoDb |
 |------|:---:|:---:|:---:|:---:|
-| **AOT & generation timing** | ✓ everything source-generated at compile time (SQL / binding / mapping / DDL), zero reflection at runtime | △ hand-written SQL; optional Dapper.AOT (interceptor-based generation) | △ runtime expression trees + model building; AOT needs Compiled Model + precompiled queries | △ runtime reflection + compiled expressions, AOT relies on trimming annotations |
+| **AOT & generation timing** | ✓ entity CRUD SQL / binding / mapping / DDL fully source-generated at compile time; chainable queries build SQL at runtime; zero reflection at runtime | △ hand-written SQL; optional Dapper.AOT (interceptor-based generation) | △ runtime expression trees + model building; AOT needs Compiled Model + precompiled queries | △ runtime reflection + compiled expressions, AOT relies on trimming annotations |
 | **Compile-time diagnostics** | ✓ 45 rules (42 analyzers + 3 generators), jumps to declarations | ❌ fails at runtime | △ migration checks (design time) | ❌ fails at runtime |
-| **SQL injection surface** | ✓ single raw-SQL shape `FormattableString`, no bare-`string` overload | △ `string` + anonymous-object params (reflection-bound) | △ LINQ parameterized, `FromSqlRaw` keeps a bare-string shape | △ values flow into runtime expression trees |
+| **SQL injection surface** | △ query family uses `FormattableString`; `Compile<T>(string sql)`, `Raw(string)`, and `UnsafeWindowOver` are explicit bare-string entry points | △ `string` + anonymous-object params (reflection-bound) | △ LINQ parameterized, `FromSqlRaw` keeps a bare-string shape | △ values flow into runtime expression trees |
 | **Query authoring model** | ✓ chained builder (SQL visible) + `FormattableString` | △ hand-written SQL | ✓ strongly-typed LINQ translation | △ QueryBuilder |
 | **Per-dialect bulk strategies** | ✓ COPY / BulkCopy / row-prepared / `= ANY`; IN sets batch in 500s | ❌ hand-written multi-value SQL and IN strings | △ varies by provider | △ bulk extension packages cover 17 providers, no auto-batching |
 | **Single-statement multi-row UPDATE** | ✓ FROM VALUES / JOIN VALUES ROW / CASE WHEN | ❌ | ❌ `ExecuteUpdate` is single-value per WHERE | ❌ |
@@ -65,7 +65,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 | **Navigation assembly** | △ `Include` emits JOINs without assembly (group by parent yourself) | △ hand-written multi-mapping | ✓ full assembly + change tracking | ❌ |
 | **Change tracking / UoW** | ❌ stateless design (zero tracking overhead) | ❌ | ✓ ChangeTracker | ❌ |
 | **Streaming** | ✓ `QueryAsyncEnumerable` / `ForEachAsync` (O(1) memory) | △ hand-written CommandBehavior | ✓ `AsAsyncEnumerable` | ❌ |
-| **Breadth & dependencies** | three dialects deeply tuned; zero third-party core deps; single target `net11.0`; Apache-2.0 | any ADO.NET; multi-target (netstandard2.0 / net8.0 / net10.0 / net461); Apache-2.0 | provider matrix; many packages, heavy deps; `net10.0`; MIT | 22 provider packages; core multi-target; Apache-2.0 |
+| **Breadth & dependencies** | three dialects deeply tuned; zero third-party runtime deps in the core; single target `net11.0`; Apache-2.0 | any ADO.NET; multi-target (netstandard2.0 / net8.0 / net10.0 / net461); Apache-2.0 | provider matrix; many packages, heavy deps; `net10.0`; MIT | 22 provider packages; core multi-target; Apache-2.0 |
 
 ### AOT implementation approaches (PalORM / Dapper.AOT / RepoDb / EF Core / FreeSql)
 
@@ -73,10 +73,10 @@ What matters for AOT is how each library replaces runtime reflection: **compile-
 
 | Dimension&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | PalORM 6.9.0                                                                                                                                           | Dapper.AOT 1.1.0                                                                                                                                                                                                                                                             | RepoDb 1.17.0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                         | EF Core 10.0.14&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;                                                                       | FreeSql 3.5.311                                                                                                                                                                              |
 |-----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Implementation approach** | Compile-time source generation, zero runtime reflection | Source generation + interceptors replacing call sites | Runtime expression trees, interpreted under AOT | Runtime expression-tree compilation + model building | Runtime reflection, no AOT adaptation |
+| **Implementation approach** | Entity CRUD generated at compile time, chainable queries built at runtime; zero runtime reflection | Source generation + interceptors replacing call sites | Runtime expression trees, interpreted under AOT | Runtime expression-tree compilation + model building | Runtime reflection, no AOT adaptation |
 | **AOT support level** | ✅ **Full**: three-dialect publish passes, zero IL warnings, 4 CI gates | 🟦 **High**: core APIs generated, explicit opt-in | 🟨 **Medium**: regular entities and LINQ work | 🟧 **Low**: Compiled Model + precompiled queries, experimental | 🟥 **None**: zero annotations, no AOT CI, 7 of 9 default-publish projects fail |
-| **Defects & failure modes** | Unsupported shapes rejected at compile time, no runtime failure surface | Uncovered APIs fall back to reflection (unsafe); Contrib and non-generic `typeof` unsupported; misconfigured interceptors silently skip | dynamic / Expando annotated unsafe; SQLite smoke only; interpreted execution slower | Precompiled queries and model must be hand-written and maintained; capability is a JIT subset | Needs TrimmerRootAssembly roots; 212 IL warnings with analyzers on; crashes at runtime (trimmed constructors) |
-| **Performance under AOT** | Equivalent to JIT | Bypasses reflection; officially AOT-safe | Per-query overhead above JIT | Depends on precompilation, no commitment | Interpreted degradation + one-time metadata build |
+| **Defects & failure modes** | Most unsupported shapes are diagnosed at compile time; `BulkUpdateBatchAsync` + `[ConcurrencyCheck]` is only a warning, and `WhereJson` off PostgreSQL or `ForUpdate`/`ForShare` on SQLite throw `NotSupportedException` at runtime | Uncovered APIs fall back to reflection (unsafe); Contrib and non-generic `typeof` unsupported; misconfigured interceptors silently skip | dynamic / Expando annotated unsafe; SQLite smoke only; interpreted execution slower | Precompiled queries and model must be hand-written and maintained; capability is a JIT subset | Needs TrimmerRootAssembly roots; 212 IL warnings with analyzers on; crashes at runtime (trimmed constructors) |
+| **Performance under AOT** | AOT has no tiered compilation or dynamic PGO, so steady-state throughput differs from JIT by deployment form; compare only same-form ratios | Bypasses reflection; officially AOT-safe | Per-query overhead above JIT | Depends on precompilation, no commitment | Interpreted degradation + one-time metadata build |
 | **Integration constraints** | `[Table]` / `[Projection]` annotations + public parameterless ctor; generator ships with the package | Zero rewrite; explicit opt-in; declarative type handlers | Works out of the box; avoid dynamic APIs under AOT | Precompiled queries + Compiled Model required | TrimmerRootAssembly + per-feature native smoke tests |
 | **Escape hatch & boundaries** | `FormattableString` / `[SqlFile]` are the AOT-safe outlets; no dynamic entities, no full LINQ translation | Uncovered calls must be rewritten; minor behavioral differences allowed | No safe outlet; wide API surface under JIT, 22 providers | No escape-hatch promise; most complete JIT feature set | No escape hatch; broadest surface, AOT is the user's responsibility |
 
@@ -263,12 +263,14 @@ public partial class User
 }
 ```
 
-> A NULL column never yields null into a non-nullable property. With nullable reference types enabled and the property declared non-nullable, the driver throws `SqlNullValueException`; on an entity with `#nullable disable` the generated reader throws `InvalidOperationException` naming the column and property. Declare nullable (`string?`) for columns that may hold NULL.
+> A NULL column never yields null into a non-nullable property. With nullable reference types enabled and the property declared non-nullable, the value is read directly and the driver throws (the exception type varies by driver, e.g. `SqlNullValueException` or `InvalidCastException`); on an entity with `#nullable disable` the generated reader throws `InvalidOperationException` naming the column and property. Declare nullable (`string?`) for columns that may hold NULL.
 
 ### Create a session
 
 ```csharp
-using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
+using PalORM.PostgreSql;
+
+await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 {
     ConnectionString = "Host=localhost;Username=user;Password=xxx;Database=mydb"
 });
@@ -311,7 +313,7 @@ await db.DeleteAsync<User>(alice.Id);   // soft-delete entities become an UPDATE
 
 ```csharp
 using var plan = db.Compile<User>(
-    """SELECT "Id", "Email" FROM "Users" WHERE "Id" = @p0""", "@p0");
+    """SELECT "Id", "email" FROM "users" WHERE "Id" = @p0""", "@p0");
 var user = (await plan.ExecuteAsync([userId]))[0];
 ```
 
@@ -320,14 +322,14 @@ A plan fixes the SQL text and parameter template to a session-scoped object; rep
 ### Bulk operations
 
 ```csharp
-await db.BulkInsertAsync(users);          // PG Binary COPY / MySQL BulkCopy or multi-value INSERT / SQLite row-prepared
-await db.BulkUpdateAsync(users);          // optimistic-lock entities: versioned single statement (falls back to DbBatch)
-await db.BulkUpdateBatchAsync(users);     // single multi-row SET (PG FROM VALUES / MySQL JOIN VALUES ROW)
-await db.BulkDeleteAsync<User>(keyList);  // PG = ANY / SQLite json_each / MySQL batched IN
-await db.BulkMergeAsync(users);           // multi-row UPSERT
+await db.BulkInsertAsync(users);                 // PG Binary COPY / MySQL BulkCopy or multi-value INSERT / SQLite row-prepared (no key backfill)
+await db.BulkUpdateAsync(users);                 // optimistic-lock entities: versioned single statement (PG UNNEST / MySQL JOIN VALUES ROW; the fallback uses DbBatch on PG/MySQL, row-by-row on SQLite)
+await db.BulkUpdateBatchAsync(users);            // single multi-row SET (PG prefers UNNEST arrays, FROM VALUES is the fallback; MySQL 8.0.19+ JOIN VALUES ROW, older CASE WHEN)
+await db.BulkDeleteAsync<User, long>(keyList);   // PG = ANY / SQLite json_each / MySQL batched IN
+await db.BulkMergeAsync(users);                  // multi-row UPSERT
 ```
 
-Default-key new rows go row-by-row INSERT to preserve ID backfill; `[ConcurrencyCheck]` entities stay row-by-row.
+`BulkInsertAsync` uses each dialect's fastest write shape and does not return generated keys; use `BulkInsertReturningAsync` when you need them back. `BulkMergeAsync` batches default-key new rows through multi-row `INSERT ... RETURNING` on PG/SQLite and row-by-row on MySQL; `[ConcurrencyCheck]` entities stay row-by-row.
 
 ## 🔧 Configuration
 
@@ -346,9 +348,11 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // environment var
 
 | Database | Verified | Driver | Floor |
 | --- | --- | --- | --- |
-| PostgreSQL | **18.6** (CI `postgres:18`) | Npgsql 11.0.0 | none; bulk writes need 9.3+, JSONB path queries 9.4+, advisory locks 9.5+ |
-| MySQL | **8.4.11** (CI `mysql:8.4`) | MySqlConnector 3.0.0 | **8.0.19** (`UPDATE JOIN VALUES ROW`; older falls back to CASE WHEN); below 8.0 unsupported |
-| SQLite | **3.54.1** (SQLite3MC 2.7.1) | Microsoft.Data.Sqlite.Core 11.0.0 | **3.35+** (`INSERT ... RETURNING`; bulk delete `json_each` needs 3.38+) |
+| PostgreSQL | **18.6** (CI `postgres:18`) | Npgsql 11.0.0 | none; the source does no version probing, so the real floor follows the SQL used (Binary COPY, JSONB `->>`, `pg_advisory_xact_lock`) |
+| MySQL | **8.4.11** (CI `mysql:8.4`) | MySqlConnector 3.0.0 | **8.0.19** (`UPDATE JOIN VALUES ROW`); older servers fall back to `CASE WHEN`, and the version parser accepts 5.7 strings |
+| SQLite | **3.54.1** (SQLite3MC 2.7.1) | Microsoft.Data.Sqlite.Core 11.0.0 | **3.35+** (`INSERT ... RETURNING`, declared unconditionally); bulk delete `json_each` uses a runtime probe and falls back to `IN` |
+
+> Verified versions come from CI. The MySQL and SQLite numbers are syntax branches visible in the source; SQLite `json_each` and the PostgreSQL floor have no source-level check, the former falling back via a runtime probe and the latter unchecked.
 
 > Verified versions are what CI runs; floors are syntax limits visible in the source. Build and benchmark environment: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
