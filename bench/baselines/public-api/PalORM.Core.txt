@@ -333,6 +333,7 @@ M:PalORM.IDbProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|st
 M:PalORM.IDbProvider|IsTransient(System.Exception)|System.Boolean|static
 M:PalORM.IDbProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
 M:PalORM.IDbProvider|MarkConnectionStateUnknown(System.Data.Common.DbConnection)|System.Void|static
+M:PalORM.IDbProvider|NormalizeCommandParameters(System.Data.Common.DbCommand)|System.Void|static
 M:PalORM.IDbProvider|QuoteIdentifier(System.String)|System.String|static
 M:PalORM.IDbProvider|QuoteQualifiedIdentifier(System.String, System.String)|System.String|static
 M:PalORM.IDbProvider|ResetConnectionStateAsync(System.Data.Common.DbConnection, System.Int32, System.Threading.CancellationToken)|System.Threading.Tasks.Task|static
