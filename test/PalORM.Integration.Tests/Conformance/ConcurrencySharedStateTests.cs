@@ -64,7 +64,9 @@ public sealed class ConcurrencySharedStateTests
 
         // 引用判等而非 GetHashCode：哈希可碰撞，不能作为「同一实例」的证据。
         // 「并发租出」= 某实例在他人持有期间被再次租出；归还后顺序复用是池的正常语义，
-        // 故租出时 TryAdd、归还后移除，只有在持有窗口内重复出现才算违规。
+        // 故租出时 TryAdd、退出持有窗口时移除，只有在持有窗口内重复出现才算违规。
+        // 窗口右端必须早于 DisposeAsync：归还内部把实例入队后，另一 worker 立即可合法
+        // 租到它；若先归还再移除，这段正常复用会被记成「并发租出」（CI 实测 worker=11 假阳性）。
         var inFlight = new System.Collections.Concurrent.ConcurrentDictionary<
             DataSession<SqliteProvider>, byte>(ReferenceEqualityComparer.Instance);
         await harness.RunAsync(borrowers, async (worker, ct) =>
@@ -79,8 +81,9 @@ public sealed class ConcurrencySharedStateTests
             }
             finally
             {
-                await session.DisposeAsync().ConfigureAwait(false);
+                // 先退出持有窗口再归还（顺序不可换，见上注）。
                 if (added) inFlight.TryRemove(session, out _);
+                await session.DisposeAsync().ConfigureAwait(false);
             }
         }).ConfigureAwait(false);
 
