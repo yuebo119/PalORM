@@ -109,8 +109,8 @@
     {
       "id": "R-C01",
       "file": "src/PalORM.Core/DataSession_Bulk.cs",
-      "original": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
-      "mutated": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total - 1;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
+      "original": "            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);\n        }\n\n        return total;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
+      "mutated": "            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);\n        }\n\n        return total - 1;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
       "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
       "note": "SQLite 批量删除（json_each 形态）少删一行：返回数恒比实际少 1",
       "expectedContracts": [
@@ -340,7 +340,7 @@
     {
       "id": "R-C22",
       "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        delCmd.CommandText = deleteCommandText;",
+      "original": "        delCmd.CommandText = commandText;",
       "mutated": "        delCmd.CommandText = \"SELECT 1\";",
       "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
       "note": "物理删除语句退化为查询（DELETE 未执行，行仍在）",
@@ -505,8 +505,8 @@
     {
       "id": "R-M-C14",
       "file": "src/PalORM.Core/DataSession.Crud.cs",
-      "original": "        BindGeneratedKeyParameter<T>(deleteInfo, delCmd, key);",
-      "mutated": "        BindGeneratedKeyParameter<T>(deleteInfo, delCmd, 0);",
+      "original": "        BindGeneratedKeyParameter<T>(info, delCmd, key);",
+      "mutated": "        BindGeneratedKeyParameter<T>(info, delCmd, 0);",
       "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
       "note": "物理删除把主键绑成 0（目标行未删）",
       "expectedContracts": [
@@ -675,8 +675,8 @@
     {
       "id": "R-M-B12",
       "file": "src/PalORM.Core/DataSession_Bulk.cs",
-      "original": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total;",
-      "mutated": "            total += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);\n        }\n\n        return total + 1;",
+      "original": "            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);\n        }\n\n        return total;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
+      "mutated": "            total += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);\n        }\n\n        return total + 1;\n    }\n\n    /// <summary>json_each 形态的 DELETE",
       "filter": "/*/*/DialectCapabilityContractTests/Sqlite_Contract_Holds",
       "note": "json_each 批量删除返回值虚增 1",
       "expectedContracts": [
