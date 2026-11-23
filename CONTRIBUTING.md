@@ -118,3 +118,5 @@ scripts/                — 通用脚本（基准/测试环境/包验证）
 ## 许可证
 
 Apache-2.0 — 见 [LICENSE](LICENSE)
+
+本项目的全部代码以 Apache-2.0 授权。提交 PR 即表示你同意该贡献以 Apache-2.0 授权并入本项目。

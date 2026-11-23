@@ -381,4 +381,6 @@ This is an experimental project and is not recommended for production use.
 Licensing is divided by release version, not by when code was introduced:
 
 - v6.7.0 and earlier released versions: AGPL-3.0-only (a granted license is not revoked by a later relicense)
-- v6.8.0 and later released versions: Apache-2.0 (covers all source in that release, including code inherited from before 6.7)
+- v6.8.0 (2026-10-26) and later released versions: Apache-2.0 (covers all source in that release, including code inherited from before 6.7)
+
+All source currently in this repository is licensed under Apache-2.0.
