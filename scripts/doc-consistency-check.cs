@@ -426,6 +426,35 @@ else
             if (n < kv.Value)
                 perfBad.Add($"README 缺少 {kv.Key}（模板 {kv.Value} 次 / README {n} 次）");
         }
+
+        // 总览表（组 | 胜场 | 时延中位比 | 内存中位比）是纯数字，不在 \color 提取范围内。
+        // 2026-11-23 实测：模板总览停在旧批次（PalORM 22/87）而 README 已是新批（32/87），
+        // 倍数分布恰好一致，D16 全绿——总览行必须单独对账，否则「只改版本号不改表格」漏检。
+        // 判据：第 1 列命中组名白名单、第 2 列是纯整数（档位 2,000 含逗号自动排除）。
+        var overviewGroups = new HashSet<string>(StringComparer.Ordinal)
+        { "ADO", "PalORM", "Dapper.AOT", "RepoDb", "EF Core", "Dapper", "FreeSql", "linq2db", "SqlSugar" };
+        List<string> OverviewRows(string text)
+        {
+            var rows = new List<string>();
+            foreach (string raw in text.Split('\n'))
+            {
+                string line = raw.TrimEnd('\r');
+                string[] cells = line.Split('|');
+                if (cells.Length < 3) continue;
+                if (!overviewGroups.Contains(cells[1].Trim())) continue;
+                if (!int.TryParse(cells[2].Trim(), out _)) continue;
+                rows.Add(line.Replace(" ", ""));
+            }
+            return rows;
+        }
+        var readmeOverview = OverviewRows(section);
+        var templateOverview = OverviewRows(templateText);
+        foreach (string row in readmeOverview)
+            if (!templateOverview.Contains(row))
+                perfBad.Add($"总览行模板缺失或不一致：{row}");
+        foreach (string row in templateOverview)
+            if (!readmeOverview.Contains(row))
+                perfBad.Add($"总览行 README 缺失或不一致：{row}");
     }
     if (perfBad.Count == 0 && perfChecked == 0)
         Fail("D16 性能章未解析到任何方括号倍数——0 项核对等于门禁失效，先查章节边界是否失配");

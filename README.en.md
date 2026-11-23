@@ -6,7 +6,7 @@
 
 *An AOT-native, compile-time-verifiable micro-ORM with SQL you control*
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -65,7 +65,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 | **Navigation assembly** | △ `Include` emits JOINs without assembly (group by parent yourself) | △ hand-written multi-mapping | ✓ full assembly + change tracking | ❌ |
 | **Change tracking / UoW** | ❌ stateless design (zero tracking overhead) | ❌ | ✓ ChangeTracker | ❌ |
 | **Streaming** | ✓ `QueryAsyncEnumerable` / `ForEachAsync` (O(1) memory) | △ hand-written CommandBehavior | ✓ `AsAsyncEnumerable` | ❌ |
-| **Breadth & dependencies** | three dialects deeply tuned; zero third-party core deps; single target `net11.0`; Apache-2.0 | any ADO.NET; multi-target (netstandard2.0 / net8.0 / net461); Apache-2.0 | provider matrix; many packages, heavy deps; `net10.0`; MIT | 20 provider packages; core multi-target; Apache-2.0 |
+| **Breadth & dependencies** | three dialects deeply tuned; zero third-party core deps; single target `net11.0`; Apache-2.0 | any ADO.NET; multi-target (netstandard2.0 / net8.0 / net10.0 / net461); Apache-2.0 | provider matrix; many packages, heavy deps; `net10.0`; MIT | 22 provider packages; core multi-target; Apache-2.0 |
 
 ### AOT implementation approaches (PalORM / Dapper.AOT / RepoDb / EF Core / FreeSql)
 
@@ -78,15 +78,15 @@ What matters for AOT is how each library replaces runtime reflection: **compile-
 | **Defects & failure modes** | Unsupported shapes rejected at compile time, no runtime failure surface | Uncovered APIs fall back to reflection (unsafe); Contrib and non-generic `typeof` unsupported; misconfigured interceptors silently skip | dynamic / Expando annotated unsafe; SQLite smoke only; interpreted execution slower | Precompiled queries and model must be hand-written and maintained; capability is a JIT subset | Needs TrimmerRootAssembly roots; 212 IL warnings with analyzers on; crashes at runtime (trimmed constructors) |
 | **Performance under AOT** | Equivalent to JIT | Bypasses reflection; officially AOT-safe | Per-query overhead above JIT | Depends on precompilation, no commitment | Interpreted degradation + one-time metadata build |
 | **Integration constraints** | `[Table]` / `[Projection]` annotations + public parameterless ctor; generator ships with the package | Zero rewrite; explicit opt-in; declarative type handlers | Works out of the box; avoid dynamic APIs under AOT | Precompiled queries + Compiled Model required | TrimmerRootAssembly + per-feature native smoke tests |
-| **Escape hatch & boundaries** | `FormattableString` / `[SqlFile]` are the AOT-safe outlets; no dynamic entities, no full LINQ translation | Uncovered calls must be rewritten; minor behavioral differences allowed | No safe outlet; wide API surface under JIT, 20 providers | No escape-hatch promise; most complete JIT feature set | No escape hatch; broadest surface, AOT is the user's responsibility |
+| **Escape hatch & boundaries** | `FormattableString` / `[SqlFile]` are the AOT-safe outlets; no dynamic entities, no full LINQ translation | Uncovered calls must be rewritten; minor behavioral differences allowed | No safe outlet; wide API surface under JIT, 22 providers | No escape-hatch promise; most complete JIT feature set | No escape hatch; broadest surface, AOT is the user's responsibility |
 
 > Scale (under AOT): ✅ Full · 🟦 High (with defects) · 🟨 Medium · 🟧 Low · 🟥 None
 
 ## 📊 Performance
 
-> **Test environment**: AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 RC2 · SQLite temp-file database (WAL + 64 MB cache + mmap) · PostgreSQL 18.6 / MySQL 8.4.11 local containers.
+> **Test environment**: AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite temp-file database (WAL + 64 MB cache + mmap) · PostgreSQL 18.6 / MySQL 8.4.11 local containers.
 >
-> **Data source**: 9 groups measured in the same run, 2026-11-22, batch `crossbench-20261122-214255.json`. The groups are PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb plus hand-written ADO.NET SQL as the baseline, each written in its ecosystem idiomatic form. Full report: [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md).
+> **Data source**: 9 groups measured in the same run, 2026-11-22, batch `crossbench-20261122-214255.json` (the first complete batch after the GA dependency upgrade: Npgsql 11 / MySqlConnector 3.0). The groups are PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb plus hand-written ADO.NET SQL as the baseline, each written in its ecosystem idiomatic form. Full report: [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md).
 
 ### Overview
 
@@ -240,7 +240,7 @@ Notes: all 9 groups come from a single batch, so ratios are only comparable with
 
 ## 🚀 Quick Start
 
-> `.NET 11` (every package targets `net11.0` only) + SDK version pinned by `global.json` (currently `11.0.100-rc.3.26522.148`); the IDE must support Roslyn source generators. Native AOT publish additionally needs about 4 GB of memory (ILC compile time, not runtime).
+> `.NET 11` (every package targets `net11.0` only) + SDK version pinned by `global.json` (currently `11.0.100`); the IDE must support Roslyn source generators. Native AOT publish additionally needs about 4 GB of memory (ILC compile time, not runtime).
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->

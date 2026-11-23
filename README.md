@@ -4,7 +4,7 @@
 
 **面向 Native AOT 的 .NET 11 微 ORM：编译时生成一切，运行时零反射**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -63,7 +63,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **导航装配**            | △ `Include` 出 JOIN 不装配（按父分组自行配对）                  | △ multi-mapping 手写                                                 | ✓ 完整装配 + 变更追踪                                           | ❌                                            |
 | **变更追踪 / 工作单元** | ❌ 无状态设计（零追踪开销）                                      | ❌                                                                    | ✓ ChangeTracker                                                 | ❌                                            |
 | **流式消费**            | ✓ `QueryAsyncEnumerable` / `ForEachAsync`（O(1) 内存）          | △ 手写 CommandBehavior                                               | ✓ `AsAsyncEnumerable`                                           | ❌                                            |
-| **覆盖广度与依赖**      | 三方言深度调优；核心零第三方依赖；`net11.0` 单目标；Apache-2.0  | 任意 ADO.NET；多目标（netstandard2.0 / net8.0 / net461）；Apache-2.0 | Provider 矩阵；多包依赖重；`net10.0`；MIT                       | 20 个 Provider 包；核心多目标；Apache-2.0    |
+| **覆盖广度与依赖**      | 三方言深度调优；核心零第三方依赖；`net11.0` 单目标；Apache-2.0  | 任意 ADO.NET；多目标（netstandard2.0 / net8.0 / net10.0 / net461）；Apache-2.0 | Provider 矩阵；多包依赖重；`net10.0`；MIT                       | 22 个 Provider 包；核心多目标；Apache-2.0    |
 
 ### AOT 实现路线对比（PalORM / Dapper.AOT / RepoDb / EF Core / FreeSql）
 
@@ -76,13 +76,13 @@ AOT 选型的核心变量是各库对运行时反射的替代策略：**编译�
 | **缺陷与失败模式**   | 不支持形态编译期拒绝，无运行时失败面                                            | 未覆盖 API 回退反射（不安全）；Contrib 与非泛型 `typeof` 不支持；拦截器配错静默失效 | dynamic / Expando 标注不安全；仅 SQLite 冒烟；解释执行降速 | 预编译查询与模型须手写并随模型维护；能力为 JIT 子集 | 须 TrimmerRootAssembly 保根；开分析器 212 条 IL 警告；执行期崩溃（构造函数被裁） |
 | **AOT 下性能**       | 与 JIT 等价                                                                     | 绕开反射，官方定位 AOT 安全                                                         | 单查询高于 JIT                                             | 依赖预编译，无性能承诺                              | 解释降级 + 首次元数据构建成本                                                    |
 | **集成约束**         | `[Table]` / `[Projection]` 注解 + 公共无参构造；生成器随包分发                  | 存量调用零改写；显式 opt-in；TypeHandler 声明式注册                                 | 开箱即用；AOT 下规避动态 API                               | 须预编译查询 + Compiled Model                       | 须 TrimmerRootAssembly + 逐项原生冒烟                                            |
-| **逃生舱与功能边界** | `FormattableString` / `[SqlFile]` 是 AOT 安全出口；无动态实体、无完整 LINQ 翻译 | 未覆盖调用只能改写形态；与主包允许细微行为差异                                      | 无安全出口；JIT 下 API 面宽，20 个 Provider                | 无逃生舱承诺；JIT 功能最全                          | 无逃生舱；功能面最广，AOT 责任在使用方                                           |
+| **逃生舱与功能边界** | `FormattableString` / `[SqlFile]` 是 AOT 安全出口；无动态实体、无完整 LINQ 翻译 | 未覆盖调用只能改写形态；与主包允许细微行为差异                                      | 无安全出口；JIT 下 API 面宽，22 个 Provider                | 无逃生舱承诺；JIT 功能最全                          | 无逃生舱；功能面最广，AOT 责任在使用方                                           |
 
 > 色标（AOT 下）：✅ 完全支持 · 🟦 高（有缺陷）· 🟨 中 · 🟧 低 · 🟥 不支持
 
 ## 📊 性能
 
-> **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 RC2 · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
+> **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
 >
 > **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。
 
@@ -263,7 +263,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 
 ## 🚀 快速开始
 
-> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100-rc.3.26522.148`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
+> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->
