@@ -84,7 +84,7 @@ AOT 选型的核心变量是各库对运行时反射的替代策略：**编译�
 
 > **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
 >
-> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。
+> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md)。
 
 ### 总览
 
@@ -259,7 +259,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- full --with-crossbench
 dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 ```
 
-说明：9 组同批同轮，比值只在同一批内可比；跨机绝对值不可比。87 行完整明细（全部 17 操作、两档、三方言，含时延与内存百分比）见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。PalORM 自身回归（微基准、并发、内存曲线、长稳）由 PerfHub 夹具单独度量，见 [bench/perfhub/README.md](../bench/perfhub/README.md)。
+说明：9 组同批同轮，比值只在同一批内可比；跨机绝对值不可比。87 行完整明细（全部 17 操作、两档、三方言，含时延与内存百分比）见 [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md)。PalORM 自身回归（微基准、并发、内存曲线、长稳）由 PerfHub 夹具单独度量，见 [bench/perfhub/README.md](bench/perfhub/README.md)。
 
 ## 🚀 快速开始
 
@@ -269,7 +269,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->
 ```
 
-包内含 `PalORM.Core` 与 `PalORM.SourceGen`；五步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
+包内含 `PalORM.Core` 与 `PalORM.SourceGen`；六步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
 
 ### 定义实体
 
@@ -285,7 +285,7 @@ public partial class User
 }
 ```
 
-> 非可空引用属性遇数据库 NULL 会抛 `SqlNullValueException`（响亮失败，不返 null）；可能存 NULL 的列请声明为可空（`string?`）。
+> 非空列遇数据库 NULL 一律响亮失败，不向非空属性注入 null：NRT 开启且声明非空时由驱动抛 `SqlNullValueException`；未启用 NRT（`#nullable disable`）的实体抛带列名与属性名的 `InvalidOperationException`。可能存 NULL 的列请声明为可空（`string?`）。
 
 ### 创建会话
 
@@ -298,7 +298,7 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 同一作用域复用一个 `db`（第 3 次同形状操作自动晋升命令复用槽）；启动期可 `PreWarmAsync(options, count: 10)` 预热连接池。
 
-按请求创建会话（Web / API）建议用 `DataSessionPool`：会话、连接、命令复用槽跨请求存活，归还时瞬态状态复位。本机 SQLite 基准中，`GetAsync` 比每操作新建会话快约 3.8 倍、分配低约 45%。
+按请求创建会话（Web / API）建议用 `DataSessionPool`：会话、连接、命令复用槽跨请求存活，归还时瞬态状态复位。本机 SQLite 基准（PerfHub 2026-11-22 批）中，池化租还的单键读时延比每操作新建会话低约 40%，分配低约 61%。
 
 ```csharp
 var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
@@ -337,7 +337,7 @@ using var plan = db.Compile<User>(
 var user = (await plan.ExecuteAsync([userId]))[0];
 ```
 
-计划把 SQL 与参数模板固定为会话级对象，重复执行只写参数值并复用命令。本机 SQLite 基准中，单行查询比优化后的 Fluent 路径快 22.6%、分配低 29.8%。SQL 逐字执行，默认过滤不适用；参数运行时类型须稳定，计划须在会话释放前 `Dispose`。
+计划把 SQL 与参数模板固定为会话级对象，重复执行只写参数值并复用命令。本机 SQLite 的 BDN 基准（2026-10-31）中，单行查询比优化后的 Fluent 路径快 22.6%、分配低 29.8%。SQL 逐字执行，默认过滤不适用；参数运行时类型须稳定，计划须在会话释放前 `Dispose`。
 
 ### 批量操作
 

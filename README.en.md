@@ -86,7 +86,7 @@ What matters for AOT is how each library replaces runtime reflection: **compile-
 
 > **Test environment**: AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite temp-file database (WAL + 64 MB cache + mmap) · PostgreSQL 18.6 / MySQL 8.4.11 local containers.
 >
-> **Data source**: 9 groups measured in the same run, 2026-11-22, batch `crossbench-20261122-214255.json` (the first complete batch after the GA dependency upgrade: Npgsql 11 / MySqlConnector 3.0). The groups are PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb plus hand-written ADO.NET SQL as the baseline, each written in its ecosystem idiomatic form. Full report: [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md).
+> **Data source**: 9 groups measured in the same run, 2026-11-22, batch `crossbench-20261122-214255.json` (the first complete batch after the GA dependency upgrade: Npgsql 11 / MySqlConnector 3.0). The groups are PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb plus hand-written ADO.NET SQL as the baseline, each written in its ecosystem idiomatic form. Full report: [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md).
 
 ### Overview
 
@@ -236,7 +236,7 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- full
 dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 ```
 
-Notes: all 9 groups come from a single batch, so ratios are only comparable within that batch; absolute times are not comparable across machines. The full 87-row detail (all 17 operations, two tiers, three dialects, with latency and memory percentages) is in [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md). PalORM self-regression (micro-benchmarks, concurrency, memory curves, stability) is measured separately by the PerfHub fixture, see [bench/perfhub/README.md](../bench/perfhub/README.md).
+Notes: all 9 groups come from a single batch, so ratios are only comparable within that batch; absolute times are not comparable across machines. The full 87-row detail (all 17 operations, two tiers, three dialects, with latency and memory percentages) is in [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md). PalORM self-regression (micro-benchmarks, concurrency, memory curves, stability) is measured separately by the PerfHub fixture, see [bench/perfhub/README.md](bench/perfhub/README.md).
 
 ## 🚀 Quick Start
 
@@ -246,7 +246,7 @@ Notes: all 9 groups come from a single batch, so ratios are only comparable with
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->
 ```
 
-The package brings `PalORM.Core` and `PalORM.SourceGen`; five steps below, full patterns and decision tables in [Best practices](docs/最佳实践.md).
+The package brings `PalORM.Core` and `PalORM.SourceGen`; six steps below, full patterns and decision tables in [Best practices](docs/最佳实践.md).
 
 ### Define an entity
 
@@ -262,7 +262,7 @@ public partial class User
 }
 ```
 
-> A non-nullable reference property reading a NULL column throws `SqlNullValueException` (fail loudly, never return null); declare nullable (`string?`) for columns that may hold NULL.
+> A NULL column never yields null into a non-nullable property. With nullable reference types enabled and the property declared non-nullable, the driver throws `SqlNullValueException`; on an entity with `#nullable disable` the generated reader throws `InvalidOperationException` naming the column and property. Declare nullable (`string?`) for columns that may hold NULL.
 
 ### Create a session
 
@@ -275,7 +275,7 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 Reuse one `db` per scope (the third same-shape operation promotes a command reuse slot); `PreWarmAsync(options, count: 10)` warms the pool at startup.
 
-For per-request sessions (web/API), prefer `DataSessionPool`: the session, connection, and command reuse slots survive across requests, and transient state is reset on return. In the local SQLite benchmark, `GetAsync` is about 3.8x faster and allocates about 45% less than creating a session per operation.
+For per-request sessions (web/API), prefer `DataSessionPool`: the session, connection, and command reuse slots survive across requests, and transient state is reset on return. In the local SQLite benchmark (PerfHub batch 2026-11-22), pooled single-key reads are about 40% lower latency and 61% lower allocation than creating a session per operation.
 
 ```csharp
 var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
@@ -314,7 +314,7 @@ using var plan = db.Compile<User>(
 var user = (await plan.ExecuteAsync([userId]))[0];
 ```
 
-A plan fixes the SQL text and parameter template to a session-scoped object; repeated executions only write values and reuse the command. In the local SQLite benchmark, a single-row query is 22.6% faster and allocates 29.8% less than the optimized fluent path. SQL is executed verbatim, default filters do not apply; runtime parameter types must stay stable, and the plan must be disposed before the session.
+A plan fixes the SQL text and parameter template to a session-scoped object; repeated executions only write values and reuse the command. In the local SQLite BDN benchmark (2026-10-31), a single-row query is 22.6% faster and allocates 29.8% less than the optimized fluent path. SQL is executed verbatim, default filters do not apply; runtime parameter types must stay stable, and the plan must be disposed before the session.
 
 ### Bulk operations
 
