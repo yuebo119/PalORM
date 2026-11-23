@@ -5,6 +5,7 @@
 //  D3/D8 字样检查随 D13 取代。2026-10-26 README 精炼轮新增 D15 站内锚点可达、D16 性能倍数对账。）
 // --fix：D10 三处计数自动同步（ITM-735 的 awk 精确重写语义保真——只替换含 [Test]+声明+计数的行）。
 // 契约：0=全过；1=有 FAIL；--fix 模式 0=同步完成；stdout 与 .sh 版对拍兼容（含 ANSI 色码）。
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -426,6 +427,35 @@ else
             if (n < kv.Value)
                 perfBad.Add($"README 缺少 {kv.Key}（模板 {kv.Value} 次 / README {n} 次）");
         }
+
+        // 总览表（组 | 胜场 | 时延中位比 | 内存中位比）是纯数字，不在 \color 提取范围内。
+        // 2026-11-23 实测：模板总览停在旧批次（PalORM 22/87）而 README 已是新批（32/87），
+        // 倍数分布恰好一致，D16 全绿——总览行必须单独对账，否则「只改版本号不改表格」漏检。
+        // 判据：第 1 列命中组名白名单、第 2 列是纯整数（档位 2,000 含逗号自动排除）。
+        var overviewGroups = new HashSet<string>(StringComparer.Ordinal)
+        { "ADO", "PalORM", "Dapper.AOT", "RepoDb", "EF Core", "Dapper", "FreeSql", "linq2db", "SqlSugar" };
+        List<string> OverviewRows(string text)
+        {
+            var rows = new List<string>();
+            foreach (string raw in text.Split('\n'))
+            {
+                string line = raw.TrimEnd('\r');
+                string[] cells = line.Split('|');
+                if (cells.Length < 3) continue;
+                if (!overviewGroups.Contains(cells[1].Trim())) continue;
+                if (!int.TryParse(cells[2].Trim(), out _)) continue;
+                rows.Add(line.Replace(" ", ""));
+            }
+            return rows;
+        }
+        var readmeOverview = OverviewRows(section);
+        var templateOverview = OverviewRows(templateText);
+        foreach (string row in readmeOverview)
+            if (!templateOverview.Contains(row))
+                perfBad.Add($"总览行模板缺失或不一致：{row}");
+        foreach (string row in templateOverview)
+            if (!readmeOverview.Contains(row))
+                perfBad.Add($"总览行 README 缺失或不一致：{row}");
     }
     if (perfBad.Count == 0 && perfChecked == 0)
         Fail("D16 性能章未解析到任何方括号倍数——0 项核对等于门禁失效，先查章节边界是否失配");
@@ -518,6 +548,92 @@ else
         Pass($"D16b README 胜场与 crossbench 批次实测一致（{winChecked} 组 / {best.Count} 格，{Path.GetFileName(latestBatch)}）");
     else
         Fail($"D16b README 胜场与实测不一致（{string.Join("；", winBad.Take(8))}）");
+}
+
+// ── D16c: README 调用形态表与 PerfHub 完整批对账（2026-11-23 新增）──
+// 动因：该表两次漂移——72ba7b7 把 per-op 列混用横评批（横评无 GetByKeySession/Pooled* 等形态项），
+// 内存列整列抄成时延值（SQLite BulkInsert 写 2623KB，实测分配 1758KB，2623.2 正是其 µs 时延）。
+// 该表此前无任何门禁：D16 只比 \color 倍数，D16b 只比胜场行。
+// 判据：取 results 下条目数 > 400 的最新完整批，组 PalORM / Rows 2000；README 段内 6 行逐列首个
+// 「时延 / 内存」对与实测相对误差 ≤ 10%（容差覆盖单位换算与一位小数舍入，可抓本次三类错：单位错
+// 49%、混批 19%~65%）。
+var shapeBad = new List<string>();
+var shapeChecked = 0;
+const string shapeMarker = "### 调用形态对照";
+var perfhubDir = "bench/perfhub/results";
+string? shapeBatch = null;
+if (Directory.Exists(perfhubDir))
+{
+    foreach (string f in Directory.GetFiles(perfhubDir, "history-*.json").OrderByDescending(f => f, StringComparer.Ordinal))
+    {
+        using JsonDocument probe = JsonDocument.Parse(File.ReadAllText(f));
+        if (probe.RootElement.TryGetProperty("Measurements", out JsonElement ms) && ms.GetArrayLength() > 400)
+        {
+            shapeBatch = f;
+            break;
+        }
+    }
+}
+var readmeText = File.ReadAllText("README.md");
+int shapeStart = readmeText.IndexOf(shapeMarker, StringComparison.Ordinal);
+if (shapeBatch is null)
+    Console.WriteLine($"  D16c 跳过：{perfhubDir} 下无条目数 > 400 的完整批");
+else if (shapeStart < 0)
+    Console.WriteLine("  D16c 跳过：README 未找到调用形态段落");
+else
+{
+    int shapeEnd = readmeText.IndexOf("\n### ", shapeStart + shapeMarker.Length, StringComparison.Ordinal);
+    string shapeSection = shapeEnd > 0 ? readmeText[shapeStart..shapeEnd] : readmeText[shapeStart..];
+    var shapeActual = new Dictionary<string, (double Us, double Kb)>(StringComparer.Ordinal);
+    using (JsonDocument doc = JsonDocument.Parse(File.ReadAllText(shapeBatch)))
+    {
+        foreach (JsonElement e in doc.RootElement.GetProperty("Measurements").EnumerateArray())
+        {
+            if (e.GetProperty("Implementation").GetString() != "PalORM") continue;
+            if (e.GetProperty("Rows").GetInt32() != 2000) continue;
+            string op = e.GetProperty("Operation").GetString() ?? "";
+            if (op is not ("GetByKey" or "GetByKeySession" or "PooledGetByKey" or "Insert" or "PooledInsert"
+                or "Update" or "PooledUpdate" or "BulkInsert" or "PooledBulkInsert")) continue;
+            // 读表三列按「每键」折算：单会话 32 键循环与池化租还都是 32 次操作的总量。
+            double div = op.Contains("Session") || op == "PooledGetByKey" ? 32d : 1d;
+            shapeActual[(e.GetProperty("Dialect").GetString() ?? "") + "|" + op] =
+                (e.GetProperty("MedianNs").GetDouble() / 1000d / div, e.GetProperty("AllocatedBytesPerOp").GetDouble() / 1024d / div);
+        }
+    }
+    string[] readOps = ["GetByKey", "GetByKeySession", "PooledGetByKey"];
+    string[] writeOps = ["Insert", "PooledInsert", "Update", "PooledUpdate", "BulkInsert", "PooledBulkInsert"];
+    var rowRegex = new Regex(@"^\|\s*(SQLite|MySQL|PostgreSQL)\s*\|(.+)$", RegexOptions.Multiline);
+    var cellRegex = new Regex(@"(\d+(?:\.\d+)?)\s*(µs|ms)\s*/\s*(\d+(?:\.\d+)?)\s*(KB|MB)");
+    foreach (Match row in rowRegex.Matches(shapeSection))
+    {
+        string dialect = row.Groups[1].Value;
+        MatchCollection cells = cellRegex.Matches(row.Groups[2].Value);
+        string[]? ops = cells.Count == 3 ? readOps : cells.Count == 6 ? writeOps : null;
+        if (ops is null)
+        {
+            shapeBad.Add($"{dialect} 行列数 {cells.Count} 无法映射（应为 3 或 6）");
+            continue;
+        }
+        for (int i = 0; i < cells.Count; i++)
+        {
+            if (!shapeActual.TryGetValue(dialect + "|" + ops[i], out var exp)) continue;
+            double gotUs = double.Parse(cells[i].Groups[1].Value, CultureInfo.InvariantCulture)
+                * (cells[i].Groups[2].Value == "ms" ? 1000d : 1d);
+            double gotKb = double.Parse(cells[i].Groups[3].Value, CultureInfo.InvariantCulture)
+                * (cells[i].Groups[4].Value == "MB" ? 1024d : 1d);
+            shapeChecked += 2;
+            if (Math.Abs(gotUs - exp.Us) / exp.Us > 0.10)
+                shapeBad.Add($"{dialect} {ops[i]} 时延 {gotUs:0.###}µs ≠ 实测 {exp.Us:0.###}µs");
+            if (Math.Abs(gotKb - exp.Kb) / exp.Kb > 0.10)
+                shapeBad.Add($"{dialect} {ops[i]} 内存 {gotKb:0.###}KB ≠ 实测 {exp.Kb:0.###}KB");
+        }
+    }
+    if (shapeBad.Count == 0 && shapeChecked == 0)
+        Fail("D16c 调用形态段未解析到任何数值——0 项核对等于门禁失效，先查章节边界或表格形态");
+    else if (shapeBad.Count == 0)
+        Pass($"D16c README 调用形态表与 PerfHub 完整批一致（{shapeChecked} 个数值，{Path.GetFileName(shapeBatch)}）");
+    else
+        Fail($"D16c README 调用形态表与 PerfHub 实测不一致（{string.Join("；", shapeBad.Take(6))}）——按最新完整批复算");
 }
 
 // ── D17: 诊断计数声明 = SourceGen 实际描述符（2026-10-31 新增）──

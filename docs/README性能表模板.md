@@ -25,7 +25,7 @@
 
 > **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
 >
-> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261102-110855.json`。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。
+> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。
 
 ### 总览
 
@@ -34,17 +34,17 @@
 | 组 | 胜场 /87 | 时延中位比 | 内存中位比 |
 |---|---:|---:|---:|
 | ADO | — | 1.00 | 1.00 |
-| PalORM | 22 | 1.01 | 1.00 |
-| Dapper.AOT | 11 | 1.07 | 1.15 |
-| RepoDb | 2 | 1.15 | 1.47 |
-| EF Core | 8 | 2.95 | 8.05 |
-| Dapper | 6 | 1.10 | 1.62 |
-| FreeSql | 0 | 1.45 | 2.00 |
-| linq2db | 0 | 1.40 | 3.02 |
-| SqlSugar | 1 | 2.25 | 3.52 |
+| PalORM | 32 | 1.00 | 1.00 |
+| Dapper.AOT | 8 | 1.06 | 1.15 |
+| RepoDb | 1 | 1.16 | 1.52 |
+| EF Core | 8 | 3.14 | 8.77 |
+| Dapper | 1 | 1.10 | 1.69 |
+| FreeSql | 1 | 1.44 | 1.99 |
+| linq2db | 1 | 1.41 | 2.89 |
+| SqlSugar | 1 | 2.06 | 3.52 |
 
-- **PalORM**：胜场 22/87（25%），时延中位比 **1.01**（全距 0.41 ~ 1.14），内存中位比 **1.00**，无 1.5 倍以上的劣化格。单行读写与批量写与 ADO 地板持平，PG 批删 0.41 倍（UNNEST 形态）。
-- **最大离群**：SqlSugar UpsertBatch（SQLite 109.2 倍、101.0 倍）、EF Core 单条 Insert（65.9 ~ 67.2 倍，每操作 DbContext 形态）。
+- **PalORM**：胜场 32/87（37%），时延中位比 **1.00**（全距 0.48 ~ 1.14），内存中位比 **1.00**，无 1.5 倍以上的劣化格。单行读写与批量写与 ADO 地板持平，PG 批删 0.48 倍（json_each 形态）、PG 批量 UPSERT 0.50 倍（UNNEST 形态）。
+- **最大离群**：SqlSugar UpsertBatch（SQLite 110.4 倍、101.3 倍）、EF Core 单条 Insert（62.5 ~ 63.3 倍，每操作 DbContext 形态）。
 
 ### 操作对照（时延 [倍数] 与内存 [相对基准]，颜色同百分比六档）
 

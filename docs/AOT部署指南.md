@@ -1,6 +1,6 @@
 # PalORM Native AOT 部署指南
 
-> 严格 Native AOT 验收要求发布后运行真实数据库路径。SQLite 已有本机原生运行证据；PostgreSQL/MySQL 在 CI 服务容器实际运行前保持“待验证”。任何 IL/AOT 警告均不得抑制。
+> 严格 Native AOT 验收要求发布后运行真实数据库路径。三方言与 NuGet 消费方四条路径均已在 CI 服务容器实测通过（2026-10-24 起，之后由每次 PR 的 AOT job 持续验证，含 2026-11-22 依赖 GA 线升级后）。任何 IL/AOT 警告均不得抑制。
 
 ## 快速开始
 
@@ -15,7 +15,7 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 
 ## 前提条件
 
-1. 本仓库使用 `global.json` 固定的 **.NET 11 preview SDK**；消费者使用与目标 `net11.0` 兼容的 SDK
+1. 本仓库使用 `global.json` 固定的 **.NET 11 GA SDK**（`11.0.100`）；消费者使用与目标 `net11.0` 兼容的 SDK
 2. 项目文件中 `IsAotCompatible=true`
 3. 实体类是顶级非泛型 `partial class`；可使用 `public` 或 `internal` 可见性
 
@@ -24,12 +24,12 @@ dotnet publish test/PalORM.AotTest -c Release -r win-x64 \
 | Provider | AOT 状态 | NuGet 包 | 原生依赖 |
 |----------|---------|----------|---------|
 | **SQLite** | ✅ 本机原生运行通过 | `Microsoft.Data.Sqlite.Core` | `e_sqlite3mc`（随发布目录部署） |
-| **PostgreSQL** | ✅ 本机原生运行通过（2026-09-16，对远程开发库）· CI 容器运行待验证 | `Npgsql` | 无 (纯托管) |
-| **MySQL** | ✅ 本机原生运行通过（2026-09-16，对远程开发库）· CI 容器运行待验证 | `MySqlConnector` | 无 (纯托管) |
+| **PostgreSQL** | ✅ 本机与 CI 容器均通过（2026-09-16 本机 / 2026-10-24 CI） | `Npgsql` | 无 (纯托管) |
+| **MySQL** | ✅ 本机与 CI 容器均通过（2026-09-16 本机 / 2026-10-24 CI） | `MySqlConnector` | 无 (纯托管) |
 
 ### SQLite — 推荐 AOT 首选
 
-当前固定的 `Microsoft.Data.Sqlite.Core 10.0.10` 搭配 `SQLite3MC.PCLRaw.bundle 2.3.6`。Bundle 为目标 RID 提供 `e_sqlite3mc` 原生库，发布时该原生资产与应用一起部署；复制产物时必须保留完整发布目录。ADO.NET 层和原生 SQLite 安全更新可独立升级，未配置密码时保持普通 SQLite 行为。
+当前固定的 `Microsoft.Data.Sqlite.Core 11.0.0` 搭配 `SQLite3MC.PCLRaw.bundle 2.7.1`。Bundle 为目标 RID 提供 `e_sqlite3mc` 原生库，发布时该原生资产与应用一起部署；复制产物时必须保留完整发布目录。ADO.NET 层和原生 SQLite 安全更新可独立升级，未配置密码时保持普通 SQLite 行为。
 
 验证：
 ```bash

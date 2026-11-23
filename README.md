@@ -2,9 +2,9 @@
 
 # PalORM
 
-**面向 Native AOT 的 .NET 11 微 ORM：编译时生成一切，运行时零反射**
+**面向 Native AOT 的 .NET 11 微 ORM：实体 CRUD 编译时生成，运行时零反射**
 
-[![.NET](https://img.shields.io/badge/.NET-11.0.0--rc.2-512BD4)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-11.0.0-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/PalORM.Core)](https://www.nuget.org/packages/PalORM.Core)
 [![CI](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalORM/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -19,7 +19,7 @@
 
 </div>
 
-Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射与迁移 DDL，运行时零反射、零 IL Emit；支持 PostgreSQL / MySQL / SQLite 三方言，多租户、乐观锁、软删除、审计、咨询锁等企业级特性开箱即用。
+Roslyn 源生成器在编译期产出实体 CRUD 的 SQL、参数绑定、对象映射与迁移 DDL，运行时零反射、零 IL Emit；链式查询的 SQL 在运行期按形状构建（仍参数化，仍零反射）。支持 PostgreSQL / MySQL / SQLite 三方言，多租户、乐观锁、软删除、审计、咨询锁等企业级特性开箱即用。
 
 ---
 
@@ -30,17 +30,15 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 ## ✨ 特性
 
 - **编译期生成**：Roslyn 源生成器为每个 `[Table]` 实体生成 RowFactory、CommandFactory 与三方言 Migration DDL，为 `[Projection]` DTO 生成物化委托，运行时零反射、零 IL Emit。
-- **编译期安全网**：46 条 Roslyn 诊断把缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 等问题拦在构建期，错误可跳转声明位置。
+- **编译期安全网**：46 条 Roslyn 诊断覆盖缺主键、租户列可空绕过隔离、乐观锁基线为 0、循环内 N+1 等形态。缺主键与租户列两项为 Error 级默认阻断，N+1 与乐观锁基线为 Warning 级（本项目开启 `TreatWarningsAsErrors`，构建期同样拦截）；除生成器跳过实体的 1 条外均可跳转声明位置。
 - **全链路 Native AOT**：SQLite / PostgreSQL / MySQL 三方言 AOT 发布与原生运行全部通过，消费方不需要 TrimmerRootAssembly。
 - **基准级性能**：单行 CRUD 与 ADO.NET 手写基准同量级，批量写按方言自动选择 PG Binary COPY、MySQL LOAD DATA、SQLite 行预编译与 json_each 批删，Web 一请求一会话形态内置会话池。
 - **企业级横切**：多租户列隔离、乐观锁、软删除、审计拦截器、读写分离、咨询锁、弹性重试与熔断开箱即用。
 - **SQL 资产编译期管理**：`[SqlFile]` 嵌入并校验 .sql，`[SqlTemplate]` 把插值 SQL 常量化，AutoTagging 自动注入“文件:行号 成员”定位注释。
 - **运维与可观测**：健康检查、跨方言统一异常族、OpenTelemetry tracing 与 metrics 内置。
-- **方言专属能力**：PG 的 UNNEST、咨询锁、LISTEN/NOTIFY、pgvector 与 JSONB 路径查询，MySQL 的 local_infile 降级与 UPDATE JOIN，SQLite 的 AES-256 加密与 PRAGMA 自动调优。
+- **方言专属能力**：PG 的 UNNEST、咨询锁、LISTEN/NOTIFY、pgvector 与 JSONB 路径查询，MySQL 的 local_infile 降级与 UPDATE JOIN，SQLite 的驱动层 AES-256 静态加密与 PRAGMA 自动调优。
 - **Schema 与种子**：`MigrateAsync` 按外键拓扑序执行三方言 DDL，`SeedAsync` 事务内幂等种子，`ValidateSchemaAsync` 对照实体返回缺失列。
-- **零依赖核心**：PalORM.Core 不引用第三方 NuGet 包，仅 BCL 与 ADO.NET 抽象。
-
-> **审计边界**：`IQueryInterceptor` 覆盖 SELECT、QueryBuilder UPDATE 与 `ExecuteAsync`；实体 Insert/Delete/Save、Bulk 家族、存储过程与多结果集不经过拦截器。写入审计请使用数据库层审计或 OpenTelemetry。
+- **零依赖核心**：PalORM.Core 无第三方运行时依赖，代码只用 BCL、ADO.NET 抽象与共享框架内的日志抽象；构建期仅 SourceLink 与 SonarAnalyzer（均为 `PrivateAssets=all`，不进消费方依赖）。
 
 ## 🆚 与主流 ORM 对比
 
@@ -48,9 +46,9 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 
 | 特性                    | **PalORM**                                                      | Dapper                                                               | EF Core                                                         | RepoDb                                       |
 | ----------------------- |:---------------------------------------------------------------:|:--------------------------------------------------------------------:|:---------------------------------------------------------------:|:--------------------------------------------:|
-| **AOT 与生成时机**      | ✓ 编译期源生成全部（SQL / 参数绑定 / 映射 / DDL），运行时零反射 | △ 手写 SQL；Dapper.AOT 可选（拦截器式源生成）                        | △ 运行时表达式树 + 模型构建；AOT 须 Compiled Model + 预编译查询 | △ 运行时反射 + 表达式编译，AOT 靠裁剪注解    |
+| **AOT 与生成时机**      | ✓ 实体 CRUD 的 SQL / 参数绑定 / 映射 / DDL 全部编译期生成；链式查询运行期构建 SQL，运行时零反射 | △ 手写 SQL；Dapper.AOT 可选（拦截器式源生成）                        | △ 运行时表达式树 + 模型构建；AOT 须 Compiled Model + 预编译查询 | △ 运行时反射 + 表达式编译，AOT 靠裁剪注解    |
 | **编译时类型诊断**      | ✓ 46 条（43 分析器 + 3 生成器），可跳转声明                     | ❌ 运行时失败                                                         | △ 迁移检查（设计时）                                            | ❌ 运行时失败                                 |
-| **SQL 注入面**          | ✓ raw SQL 唯一形态 `FormattableString`，无裸 `string` 重载      | △ `string` + 匿名对象参数（反射绑定）                                | △ LINQ 参数化，`FromSqlRaw` 存裸串形态                          | △ 值进运行时表达式树                         |
+| **SQL 注入面**          | △ 主查询族统一 `FormattableString`；`Compile<T>(string sql)`、`Raw(string)`、`UnsafeWindowOver` 为显式裸串入口      | △ `string` + 匿名对象参数（反射绑定）                                | △ LINQ 参数化，`FromSqlRaw` 存裸串形态                          | △ 值进运行时表达式树                         |
 | **查询书写范式**        | ✓ 链式构建器（SQL 显式可见）+ `FormattableString`               | △ 手写 SQL                                                           | ✓ LINQ 强类型翻译                                               | △ QueryBuilder                               |
 | **三方言批量策略**      | ✓ COPY / BulkCopy / 行预编译 / `= ANY`；IN 集合 500 键自动分批  | ❌ 手写多值 SQL 与 IN 拼串                                            | △ 按 Provider 而异                                              | △ Bulk 扩展包覆盖 17 个 Provider，无自动分批 |
 | **单语句多行 UPDATE**   | ✓ FROM VALUES / JOIN VALUES ROW / CASE WHEN                     | ❌                                                                    | ❌ `ExecuteUpdate` 仅按 WHERE 单值                               | ❌                                            |
@@ -63,7 +61,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 | **导航装配**            | △ `Include` 出 JOIN 不装配（按父分组自行配对）                  | △ multi-mapping 手写                                                 | ✓ 完整装配 + 变更追踪                                           | ❌                                            |
 | **变更追踪 / 工作单元** | ❌ 无状态设计（零追踪开销）                                      | ❌                                                                    | ✓ ChangeTracker                                                 | ❌                                            |
 | **流式消费**            | ✓ `QueryAsyncEnumerable` / `ForEachAsync`（O(1) 内存）          | △ 手写 CommandBehavior                                               | ✓ `AsAsyncEnumerable`                                           | ❌                                            |
-| **覆盖广度与依赖**      | 三方言深度调优；核心零第三方依赖；`net11.0` 单目标；Apache-2.0  | 任意 ADO.NET；多目标（netstandard2.0 / net8.0 / net461）；Apache-2.0 | Provider 矩阵；多包依赖重；`net10.0`；MIT                       | 20 个 Provider 包；核心多目标；Apache-2.0    |
+| **覆盖广度与依赖**      | 三方言深度调优；核心零第三方运行时依赖；`net11.0` 单目标；Apache-2.0  | 任意 ADO.NET；多目标（netstandard2.0 / net8.0 / net10.0 / net461）；Apache-2.0 | Provider 矩阵；多包依赖重；`net10.0`；MIT                       | 22 个 Provider 包；核心多目标；Apache-2.0    |
 
 ### AOT 实现路线对比（PalORM / Dapper.AOT / RepoDb / EF Core / FreeSql）
 
@@ -71,20 +69,20 @@ AOT 选型的核心变量是各库对运行时反射的替代策略：**编译�
 
 | 选型维度             | PalORM 6.9.0                                                                    | Dapper.AOT 1.1.0                                                                    | RepoDb 1.17.0                                              | EF Core 10.0.14                                     | FreeSql 3.5.311                                                                  |
 | -------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------- |
-| **实现路线**         | 编译期源生成，运行时零反射                                                      | 源生成 + 拦截器替换调用点                                                           | 运行时表达式树，AOT 下解释执行                             | 运行时表达式树编译 + 模型构建                       | 运行时反射，无 AOT 适配                                                          |
+| **实现路线**         | 实体 CRUD 编译期源生成，链式查询运行期构建；运行时零反射                          | 源生成 + 拦截器替换调用点                                                           | 运行时表达式树，AOT 下解释执行                             | 运行时表达式树编译 + 模型构建                       | 运行时反射，无 AOT 适配                                                          |
 | **AOT 支持程度**     | ✅ **完全支持**：三方言发布通过，零 IL 告警，4 条 CI 门禁                        | 🟦 **高**：核心 API 生成实现，须显式启用                                             | 🟨 **中**：常规实体与 LINQ 可用                             | 🟧 **低**：Compiled Model + 预编译查询，实验性       | 🟥 **不支持**：零注解、无 AOT CI，默认发布 9 项中 7 项失败                        |
-| **缺陷与失败模式**   | 不支持形态编译期拒绝，无运行时失败面                                            | 未覆盖 API 回退反射（不安全）；Contrib 与非泛型 `typeof` 不支持；拦截器配错静默失效 | dynamic / Expando 标注不安全；仅 SQLite 冒烟；解释执行降速 | 预编译查询与模型须手写并随模型维护；能力为 JIT 子集 | 须 TrimmerRootAssembly 保根；开分析器 212 条 IL 警告；执行期崩溃（构造函数被裁） |
-| **AOT 下性能**       | 与 JIT 等价                                                                     | 绕开反射，官方定位 AOT 安全                                                         | 单查询高于 JIT                                             | 依赖预编译，无性能承诺                              | 解释降级 + 首次元数据构建成本                                                    |
+| **缺陷与失败模式**   | 多数不支持形态编译期诊断；`BulkUpdateBatchAsync`+`[ConcurrencyCheck]` 仅 Warning，`WhereJson` 非 PG 与 SQLite `ForUpdate/ForShare` 等在运行期抛 `NotSupportedException` | 未覆盖 API 回退反射（不安全）；Contrib 与非泛型 `typeof` 不支持；拦截器配错静默失效 | dynamic / Expando 标注不安全；仅 SQLite 冒烟；解释执行降速 | 预编译查询与模型须手写并随模型维护；能力为 JIT 子集 | 须 TrimmerRootAssembly 保根；开分析器 212 条 IL 警告；执行期崩溃（构造函数被裁） |
+| **AOT 下性能**       | AOT 无分层编译与动态 PGO，稳态吞吐与 JIT 存在部署形态差异；跨形态只比同批同形态比值 | 绕开反射，官方定位 AOT 安全                                                         | 单查询高于 JIT                                             | 依赖预编译，无性能承诺                              | 解释降级 + 首次元数据构建成本                                                    |
 | **集成约束**         | `[Table]` / `[Projection]` 注解 + 公共无参构造；生成器随包分发                  | 存量调用零改写；显式 opt-in；TypeHandler 声明式注册                                 | 开箱即用；AOT 下规避动态 API                               | 须预编译查询 + Compiled Model                       | 须 TrimmerRootAssembly + 逐项原生冒烟                                            |
-| **逃生舱与功能边界** | `FormattableString` / `[SqlFile]` 是 AOT 安全出口；无动态实体、无完整 LINQ 翻译 | 未覆盖调用只能改写形态；与主包允许细微行为差异                                      | 无安全出口；JIT 下 API 面宽，20 个 Provider                | 无逃生舱承诺；JIT 功能最全                          | 无逃生舱；功能面最广，AOT 责任在使用方                                           |
+| **逃生舱与功能边界** | `FormattableString` / `[SqlFile]` 是 AOT 安全出口；无动态实体、无完整 LINQ 翻译 | 未覆盖调用只能改写形态；与主包允许细微行为差异                                      | 无安全出口；JIT 下 API 面宽，22 个 Provider                | 无逃生舱承诺；JIT 功能最全                          | 无逃生舱；功能面最广，AOT 责任在使用方                                           |
 
 > 色标（AOT 下）：✅ 完全支持 · 🟦 高（有缺陷）· 🟨 中 · 🟧 低 · 🟥 不支持
 
 ## 📊 性能
 
-> **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 RC2 · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
+> **测试环境**：AMD Ryzen 9 8945HX · Windows 10 22H2 · .NET 11 GA · SQLite 临时文件库（WAL + 64 MB cache + mmap）· PostgreSQL 18.6 / MySQL 8.4.11 本机容器。
 >
-> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。
+> **数据来源**：9 组同批同轮采集，2026-11-22，批次 `crossbench-20261122-214255.json`（依赖 GA 线升级后首个完整批：Npgsql 11 / MySqlConnector 3.0）。9 组为 PalORM / Dapper / Dapper.AOT / linq2db / EF Core / SqlSugar / FreeSql / RepoDb 与 ADO.NET 手写 SQL（基准），各用生态惯用写法。完整报告见 [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md)。
 
 ### 总览
 
@@ -227,28 +225,28 @@ AOT 选型的核心变量是各库对运行时反射的替代策略：**编译�
 
 ### 调用形态对照（读取三态 / 写入两态）
 
-同一个查询或写入，会话形态不同，开销差一个量级。下表是 PerfHub 同批实测（2,000 档，批次 `history-20261122-213611.json`，2026-11-22），读取按**每键**折算、写入按**每操作**，括号内为相对 per-op 形态的变化。
+同一个查询或写入，会话形态不同，开销差一档。下表是 PerfHub 同批实测（2,000 档，批次 `history-20261122-213611.json`，2026-11-22），读取按**每键**折算（单会话 32 键循环按 32 除），写入按**每操作**，括号内为相对 per-op 形态的变化。
 
 | 方言 | per-op（每操作新建会话） | 长会话（单会话 32 键循环） | 池化租还（每操作一租期） |
 |---|---:|---:|---:|
-| SQLite | 6.3 µs / 2.4KB | 4.5 µs / 1.4KB（−29% / −39%） | 4.5 µs / 1.5KB（−28% / −37%） |
-| MySQL | 182.7 µs / 4.6KB | 195.2 µs / 3.3KB（+7% / −29%） | 196.8 µs / 3.5KB（+8% / −24%） |
-| PostgreSQL | 202.4 µs / 3.2KB | 203.6 µs / 2.2KB（+1% / −33%） | 193.6 µs / 2.3KB（−4% / −30%） |
+| SQLite | 5.9 µs / 2.2KB | 3.5 µs / 0.7KB（−41% / −67%） | 3.5 µs / 0.9KB（−40% / −61%） |
+| MySQL | 176.5 µs / 4.5KB | 185.3 µs / 2.5KB（+5% / −45%） | 192.2 µs / 3.1KB（+9% / −31%） |
+| PostgreSQL | 205.5 µs / 3.6KB | 203.9 µs / 2.0KB（−1% / −43%） | 168.6 µs / 2.3KB（−18% / −36%） |
 
 | 方言 | Insert per-op | Insert 池化 | Update per-op | Update 池化 | BulkInsert（2,000 行） | BulkInsert 池化 |
 |---|---:|---:|---:|---:|---:|---:|
-| SQLite | 17.3 µs / 3.1KB | 16.7 µs / 2.5KB（−3% / −21%） | 7.4 µs / 3.0KB | 6.7 µs / 2.3KB（−10% / −22%） | 3.12 ms / 2623KB | 3.19 ms / 2627KB（+2% / +0%） |
-| MySQL | 4.04 ms / 16.2KB | 3.82 ms / 15.1KB（−5% / −7%） | 187.6 µs / 5.2KB | 190.4 µs / 4.4KB（+2% / −15%） | 17.19 ms / 2605KB | 15.22 ms / 2607KB（−11% / +0%） |
-| PostgreSQL | 1.36 ms / 9.3KB | 1.32 ms / 7.6KB（−3% / −19%） | 1.37 ms / 9.3KB | 1.42 ms / 8.7KB（+3% / −6%） | 8.80 ms / 2512KB | 9.47 ms / 2546KB（+8% / +1%） |
+| SQLite | 17.0 µs / 2.8KB | 15.0 µs / 1.0KB（−12% / −64%） | 7.1 µs / 3.1KB | 5.0 µs / 1.1KB（−30% / −64%） | 2.62 ms / 1758KB | 2.68 ms / 1761KB（+2% / +0%） |
+| MySQL | 3.99 ms / 16.3KB | 3.71 ms / 13.7KB（−7% / −16%） | 198.4 µs / 6.1KB | 174.6 µs / 3.5KB（−12% / −42%） | 10.88 ms / 478KB | 11.38 ms / 496KB（+5% / +4%） |
+| PostgreSQL | 1.36 ms / 13.3KB | 1.31 ms / 5.4KB（−4% / −60%） | 1.37 ms / 13.9KB | 1.40 ms / 6.0KB（+2% / −57%） | 5.32 ms / 346KB | 5.25 ms / 348KB（−1% / +1%） |
 
 **多键点读**：同形状的多键读改用 `GetByKeyManyAsync`（SQLite 单参数 `json_each`、PostgreSQL `= ANY(数组)`、MySQL 分批 `IN`），比逐键 `GetAsync` 快 5.0 至 7.8 倍、内存低 3.2 至 3.5 倍（`bench/crossbench/ReadManyProbe`，100 / 1000 / 10000 三档，2026-11-05）。
 
 **形态选择判据**：
 
-- 会话寿命跨多个操作（同一请求里多次读写、报表批次）：用长会话，别每操作新建。读取省约三成时延与四成内存（SQLite），写入省 3% 至 10%。
-- 每请求一会话（Web/服务端的典型形状）：用 `DataSessionPool` 租还，收益接近长会话，且不需要在业务代码里传会话对象。
+- 会话寿命跨多个操作（同一请求里多次读写、报表批次）：用长会话，别每操作新建。读取省约四成时延与三分之二内存（SQLite）；写入池化跨三方言省 4% 至 30% 时延，PG Update 是唯一例外（+2%）。
+- 每请求一会话（Web/服务端的典型形状）：用 `DataSessionPool` 租还，收益与长会话同量级（SQLite −40% 对 −41%；PG 池化 −18% 优于长会话 −1%；MySQL 两种形态都比 per-op 慢 5% 至 9%），且不需要在业务代码里传会话对象。
 - 一次性调用或低频操作：per-op 形态即可，池化只会多一次租还。
-- 单次大调用（整批批量插入）：池化不划算，租还开销摊在单次调用上，实测 PostgreSQL 慢约 8%，SQLite 持平至 +2%，MySQL 略省（BulkInsert −11%）。
+- 单次大调用（整批批量插入）：池化不划算，租还开销摊在单次调用上，实测 SQLite +2%、PostgreSQL −1%、MySQL +5%。
 
 ### 复现
 
@@ -259,17 +257,18 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- full --with-crossbench
 dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 ```
 
-说明：9 组同批同轮，比值只在同一批内可比；跨机绝对值不可比。87 行完整明细（全部 17 操作、两档、三方言，含时延与内存百分比）见 [性能全量报告-2026-11-22.md](性能全量报告-2026-11-22.md)。PalORM 自身回归（微基准、并发、内存曲线、长稳）由 PerfHub 夹具单独度量，见 [bench/perfhub/README.md](../bench/perfhub/README.md)。
+说明：9 组同批同轮，比值只在同一批内可比；跨机绝对值不可比。87 行完整明细（全部 17 操作、两档、三方言，含时延与内存百分比）见 [性能全量报告-2026-11-22.md](docs/性能全量报告-2026-11-22.md)。PalORM 自身回归（微基准、并发、内存曲线、长稳）由 PerfHub 夹具单独度量，见 [bench/perfhub/README.md](bench/perfhub/README.md)。
 
 ## 🚀 快速开始
 
-> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100-rc.3.26522.148`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
+> `.NET 11`（全部包单目标 `net11.0`）+ SDK 版本由 `global.json` 精确钉住（当前 `11.0.100`），IDE 需支持 Roslyn 源生成器；Native AOT 发布另需约 4 GB 内存（ILC 编译期，非运行时）。
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->
+<PackageReference Include="PalORM.SourceGen" Version="6.9.0" PrivateAssets="all" />
 ```
 
-包内含 `PalORM.Core` 与 `PalORM.SourceGen`；五步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
+Provider 包自动带入 `PalORM.Core` 与驱动；源生成器须另行引用 `PalORM.SourceGen`（`PrivateAssets="all"` 使它不流向下游）。六步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
 
 ### 定义实体
 
@@ -285,12 +284,14 @@ public partial class User
 }
 ```
 
-> 非可空引用属性遇数据库 NULL 会抛 `SqlNullValueException`（响亮失败，不返 null）；可能存 NULL 的列请声明为可空（`string?`）。
+> 非空列遇数据库 NULL 一律响亮失败，不向非空属性注入 null：NRT 开启且声明非空时直接读取，NULL 由驱动抛异常（类型随驱动而异，如 `SqlNullValueException` 或 `InvalidCastException`）；未启用 NRT（`#nullable disable`）的实体由生成代码抛带列名与属性名的 `InvalidOperationException`。可能存 NULL 的列请声明为可空（`string?`）。
 
 ### 创建会话
 
 ```csharp
-using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
+using PalORM.PostgreSql;
+
+await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 {
     ConnectionString = "Host=localhost;Username=user;Password=xxx;Database=mydb"
 });
@@ -298,12 +299,12 @@ using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOptions
 
 同一作用域复用一个 `db`（第 3 次同形状操作自动晋升命令复用槽）；启动期可 `PreWarmAsync(options, count: 10)` 预热连接池。
 
-按请求创建会话（Web / API）建议用 `DataSessionPool`：会话、连接、命令复用槽跨请求存活，归还时瞬态状态复位。本机 SQLite 基准中，`GetAsync` 比每操作新建会话快约 3.8 倍、分配低约 45%。
+按请求创建会话（Web / API）建议用 `DataSessionPool`：会话、连接、命令复用槽跨请求存活，归还时瞬态状态复位。本机 SQLite 基准（PerfHub 2026-11-22 批）中，池化租还的单键读时延比每操作新建会话低约 40%，分配低约 61%。
 
 ```csharp
 var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
 
-await using var db = await pool.RentAsync();   // DisposeAsync 即归还，不关闭物理连接
+await using var db = await pool.RentAsync();   // DisposeAsync 即归还；池满或池已释放时降级为真实释放并关闭物理连接
 ```
 
 ### 建表与种子
@@ -323,7 +324,7 @@ var all   = await db.From<User>().Where($"email LIKE {"%@example.com%"}").ToList
 
 alice.Email = "new@example.com";
 await db.UpdateAsync(alice);            // 乐观锁实体自动校验版本，冲突抛 ConcurrencyConflictException
-await db.SaveAsync(alice);              // 默认主键走 Insert，非默认主键单行 UPSERT
+await db.SaveAsync(alice);              // 默认主键走 Insert，非默认主键单行 UPSERT（[ConcurrencyCheck] 实体抛 NotSupportedException）
 await db.DeleteAsync<User>(alice.Id);   // 软删实体自动转 UPDATE
 ```
 
@@ -333,23 +334,23 @@ await db.DeleteAsync<User>(alice.Id);   // 软删实体自动转 UPDATE
 
 ```csharp
 using var plan = db.Compile<User>(
-    """SELECT "Id", "Email" FROM "Users" WHERE "Id" = @p0""", "@p0");
+    """SELECT "Id", "email" FROM "users" WHERE "Id" = @p0""", "@p0");
 var user = (await plan.ExecuteAsync([userId]))[0];
 ```
 
-计划把 SQL 与参数模板固定为会话级对象，重复执行只写参数值并复用命令。本机 SQLite 基准中，单行查询比优化后的 Fluent 路径快 22.6%、分配低 29.8%。SQL 逐字执行，默认过滤不适用；参数运行时类型须稳定，计划须在会话释放前 `Dispose`。
+计划把 SQL 与参数模板固定为会话级对象，重复执行只写参数值并复用命令。本机 SQLite 的 BDN 基准（2026-10-31）中，单行查询比优化后的 Fluent 路径快 22.6%、分配低 29.8%。SQL 逐字执行，默认过滤不适用；参数运行时类型须稳定，计划须在会话释放前 `Dispose`。
 
 ### 批量操作
 
 ```csharp
-await db.BulkInsertAsync(users);          // PG Binary COPY / MySQL BulkCopy 或多值 INSERT / SQLite 行预编译
-await db.BulkUpdateAsync(users);          // 乐观锁实体：版本化单语句（能力不全回退 DbBatch）
-await db.BulkUpdateBatchAsync(users);     // 单语句多行 SET（PG FROM VALUES / MySQL JOIN VALUES ROW）
-await db.BulkDeleteAsync<User>(keyList);  // PG = ANY / SQLite json_each / MySQL IN 分批
-await db.BulkMergeAsync(users);           // 多行 UPSERT
+await db.BulkInsertAsync(users);                 // PG Binary COPY / MySQL BulkCopy 或多值 INSERT / SQLite 行预编译（不回填主键）
+await db.BulkUpdateAsync(users);                 // 乐观锁实体：版本化单语句（PG UNNEST / MySQL JOIN VALUES ROW；回退时 PG/MySQL 走 DbBatch，SQLite 逐条）
+await db.BulkUpdateBatchAsync(users);            // 单语句多行 SET（PG 优先 UNNEST 数组、FROM VALUES 为回退；MySQL 8.0.19+ JOIN VALUES ROW，低版本 CASE WHEN）
+await db.BulkDeleteAsync<User, long>(keyList);   // PG = ANY / SQLite json_each / MySQL IN 分批
+await db.BulkMergeAsync(users);                  // 多行 UPSERT
 ```
 
-默认键的新行走逐条 INSERT 保留 ID 回填；`[ConcurrencyCheck]` 实体维持逐条。
+`BulkInsertAsync` 走各方言最快的写入形态，不返回自增主键，需要回填时用 `BulkInsertReturningAsync`。`BulkMergeAsync` 的默认键新行在 PG/SQLite 走多行 `INSERT ... RETURNING` 批量回填、MySQL 逐条，`[ConcurrencyCheck]` 实体维持逐条。
 
 ## 🔧 配置
 
@@ -368,11 +369,11 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 | 数据库     | 已验证版本                    | 驱动                                   | 硬门槛                                                                     |
 | ---------- | ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------- |
-| PostgreSQL | **18.6**（CI `postgres:18`）  | Npgsql 11.0.0                          | 未设；批量写需 9.3+，JSONB 路径查询 9.4+，咨询锁 9.5+                      |
-| MySQL      | **8.4.11**（CI `mysql:8.4`）  | MySqlConnector 3.0.0                   | **8.0.19**（`UPDATE JOIN VALUES ROW`，更低回退 CASE WHEN）；8.0 以下不支持 |
-| SQLite     | **3.54.1**（SQLite3MC 2.7.1） | Microsoft.Data.Sqlite.Core 11.0.0      | **3.35+**（`INSERT ... RETURNING`；批删 `json_each` 需 3.38+）             |
+| PostgreSQL | **18.6**（CI `postgres:18`）  | Npgsql 11.0.0                          | 未设；源码不做版本探测，实际下限由所用语法决定（Binary COPY、JSONB `->>`、`pg_advisory_xact_lock`） |
+| MySQL      | **8.4.11**（CI `mysql:8.4`）  | MySqlConnector 3.0.0                   | **8.0.19**（`UPDATE JOIN VALUES ROW`）；更低版本回退 `CASE WHEN`，代码兼容 5.7 版本串 |
+| SQLite     | **3.54.1**（SQLite3MC 2.7.1） | Microsoft.Data.Sqlite.Core 11.0.0      | **3.35+**（`INSERT ... RETURNING`，代码无条件声明支持）；批删 `json_each` 走运行时探针，不可用即回退 `IN` |
 
-> 已验证版本为 CI 实测；门槛是源码可查的语法下限。构建与基准环境见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+> 已验证版本为 CI 实测。MySQL 与 SQLite 的数字是源码可查的语法分支；SQLite 的 `json_each` 与 PostgreSQL 的版本下限没有源码判断，前者靠运行时探针回退，后者不做校验。
 
 ## 🤝 贡献
 
@@ -398,5 +399,9 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 [Apache-2.0](LICENSE)
 
-v6.7.0 及以前的已发布版本仍为 AGPL-3.0-only；<br>
-v6.8.0 及以后的新版本统一变更为 Apache-2.0 发布。
+许可按发布版本划分，不按代码引入时间划分：
+
+- v6.7.0 及更早的已发布版本：AGPL-3.0-only（已发布的授权不因后续换证而撤销）
+- v6.8.0（2026-10-26）及以后的已发布版本：Apache-2.0（覆盖该版本的全部源码，含 6.7 之前继承的代码）
+
+仓库当前全部源码以 Apache-2.0 授权。
