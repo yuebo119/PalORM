@@ -60,6 +60,35 @@ public sealed class UniqueViolationTests
             async () => await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" }));
         await Assert.That(thrown!.InnerException).IsTypeOf<MySqlConnector.MySqlException>();
     }
+
+    /// <summary>2026-11-24 补：批量写通道与单行同口径。批量插入的异常原先原样抛驱动异常，
+    /// 按 <c>catch (UniqueConstraintViolationException)</c> 写的调用方在批量路径漏网。</summary>
+    [Test]
+    public async Task BulkInsertAsync_DuplicateUniqueKey_ThrowsUnifiedException()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" });
+
+        UniqueConstraintViolationException? thrown = await Assert.ThrowsAsync<UniqueConstraintViolationException>(
+            async () => await db.BulkInsertAsync([new UniqueProbeEntity { Sku = "SKU-1" }]));
+        await Assert.That(thrown!.InnerException).IsTypeOf<Microsoft.Data.Sqlite.SqliteException>();
+    }
+
+    /// <summary>同上，走批量事务骨架（BulkUpdate 路径）。</summary>
+    [Test]
+    public async Task BulkUpdateAsync_DuplicateUniqueKey_ThrowsUnifiedException()
+    {
+        await using var db = await TestDb.SqliteAsync();
+        await db.MigrateAsync();
+        await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-1" });
+        UniqueProbeEntity second = await db.InsertAsync(new UniqueProbeEntity { Sku = "SKU-2" });
+
+        second.Sku = "SKU-1";
+        UniqueConstraintViolationException? thrown = await Assert.ThrowsAsync<UniqueConstraintViolationException>(
+            async () => await db.BulkUpdateAsync([second]));
+        await Assert.That(thrown!.InnerException).IsTypeOf<Microsoft.Data.Sqlite.SqliteException>();
+    }
 }
 
 #region Test Entities

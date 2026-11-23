@@ -55,7 +55,15 @@ public partial class DataSession<TProvider>
             return await TProvider.BulkInsertAsync(_conn, GetActiveTransaction(), entities, batchSize,
                 _commandTimeoutSeconds, ct, _isolationLevel).ConfigureAwait(false);  // r6-N2
         }
-        catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }  // FLT4-3
+        catch (Exception ex)
+        {
+            MarkConnectionPoisoned(ex);  // FLT4-3
+            // 2026-11-24：与单行 Insert/Save 同口径翻译唯一冲突。批量通道原样抛驱动异常，
+            // 会让按 UniqueConstraintViolationException 分流的调用方在批量路径漏网。
+            if (TProvider.IsUniqueViolation(ex))
+                throw new UniqueConstraintViolationException(ex);
+            throw;
+        }
     }
 
     /// <summary>批量插入并回填自增主键（RETURNING 方言专用）。

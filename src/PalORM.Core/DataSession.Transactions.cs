@@ -351,11 +351,16 @@ public sealed partial class DataSession<TProvider>
     /// <para><b>ITM-905 登记（r24）</b>：本内核成功与异常路径均不调 DisposeTransactionResourcesAsync
     /// （WithTransaction 双路径都调）——当前 RegisterTransactionResource 全仓零调用方，
     /// 无触发路径；未来接入调用方时必须同步本内核的两路径释放，否则资源泄漏只等
-    /// ExitTransactionFlow 置 null 丢弃或会话 Dispose 兜底。</para></summary>
+    /// ExitTransactionFlow 置 null 丢弃或会话 Dispose 兜底。</para>
+    /// <para><b>唯一约束翻译</b>（2026-11-24）：默认把驱动唯一冲突翻译为
+    /// <see cref="UniqueConstraintViolationException"/>，与单行 Insert/Save 同口径。迁移 DDL 是
+    /// 唯一例外（<paramref name="translateUniqueViolation"/> 置 false）：并发建表的确认冲突由
+    /// <c>IsDuplicateSchemaObject</c> 幂等兜底消费，翻译成 PalORM 异常会让该兜底失配。</para></summary>
     private async ValueTask<T> RunInTransactionScopeAsync<T>(
         object? operationOwner,
         Func<DbTransaction, CancellationToken, Task<T>> work,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool translateUniqueViolation = true)
     {
         DbTransaction? previousTransaction = GetActiveTransaction();
         DbTransaction transaction = previousTransaction
@@ -406,6 +411,7 @@ public sealed partial class DataSession<TProvider>
                     transaction, exception, RollbackTimeoutSeconds, TProvider.PreferSynchronousIo, ct)
                     .ConfigureAwait(false);
             }
+            ThrowIfUniqueViolation(exception, translateUniqueViolation);
             throw;
         }
         finally
@@ -421,5 +427,13 @@ public sealed partial class DataSession<TProvider>
                 await TransactionCleanup.DisposeTransactionPreservingAsync(transaction, primaryException).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>唯一冲突翻译（2026-11-24）：批量骨架的异常出口与单行 Insert/Save 同口径。
+    /// 抽成独立方法是为了让 <see cref="RunInTransactionScopeAsync{T}"/> 的认知复杂度留在 S3776 线内。</summary>
+    private static void ThrowIfUniqueViolation(Exception exception, bool translate)
+    {
+        if (translate && TProvider.IsUniqueViolation(exception))
+            throw new UniqueConstraintViolationException(exception);
     }
 }
