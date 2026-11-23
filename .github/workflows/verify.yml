@@ -82,8 +82,23 @@ jobs:
                   dotnet build PalORM.ci.slnf -c Release --no-restore --no-incremental
                   -warnaserror
 
-    unit:
-        name: Unit Tests
+            - name: Upload test binaries
+              # 2026-11-23：Core 与 SourceGen 拆成两个并行测试 job 后共用本构建产物（bin 含
+              # ProjectReference 复制的 dll；project.assets.json 供 dotnet run --no-build 的
+              # MSBuild 评估）。不共享则每个测试 job 要重跑一次构建，抵消并行收益。
+              uses: actions/upload-artifact@v7
+              with:
+                  name: test-binaries
+                  path: |
+                      test/PalORM.Core.Tests/bin/Release/**
+                      test/PalORM.Core.Tests/obj/**
+                      test/PalORM.SourceGen.Tests/bin/Release/**
+                      test/PalORM.SourceGen.Tests/obj/**
+                  retention-days: 1
+                  if-no-files-found: error
+
+    unit-core:
+        name: Unit Tests (Core)
         runs-on: ubuntu-24.04
         needs: build
         timeout-minutes: 15
@@ -93,11 +108,13 @@ jobs:
               with:
                   global-json-file: global.json
 
+            - name: Download test binaries
+              uses: actions/download-artifact@v8
+              with:
+                  name: test-binaries
+
             - name: Install dotnet-coverage (M3-1)
               run: dotnet tool install -g dotnet-coverage
-
-            - name: Build
-              run: dotnet build PalORM.ci.slnf -c Release --no-incremental
 
             - name: Core tests (with coverage, M3-1)
               # TUnit 1.69 起 --coverage-output 仅给文件名（含 ./ 前缀）时归一化进
@@ -162,6 +179,25 @@ jobs:
               # 公开 API 基线在 bench/baselines/public-api/；破坏性变更（新增/删除/改签名）在 PR 报红。
               # 有意变更时运行 --update 重写基线，并在提交说明标注 SemVer 升级类型。
               run: dotnet run --file scripts/public-api-snapshot.cs -- --check --configuration Release
+
+    unit-sourcegen:
+        name: Unit Tests (SourceGen)
+        runs-on: ubuntu-24.04
+        needs: build
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v7
+            - uses: actions/setup-dotnet@v6
+              with:
+                  global-json-file: global.json
+
+            - name: Download test binaries
+              uses: actions/download-artifact@v8
+              with:
+                  name: test-binaries
+
+            - name: Install dotnet-coverage (M3-1)
+              run: dotnet tool install -g dotnet-coverage
 
             # COV-3（2026-11-04）：SourceGen 此前完全无覆盖率采集，生成器发射体的回归
             # 只能靠快照与断言间接判断。SourceGen.Tests 直接引用生成器工程（进程内调用
@@ -307,7 +343,7 @@ jobs:
     diff-coverage:
         name: Diff Coverage (T1-diff)
         runs-on: ubuntu-24.04
-        needs: [unit, integration]
+        needs: [unit-core, integration]
         # 判据与执行解耦（2026-11-04）：测试 job 红时本步不得静默 skipped。
         # 实测 run 41778965168：Unit 因 NU1903 失败，diff 门禁变 skipped，证据链消失。
         # always() 保证运行；产物缺失时 download-artifact 直接失败并暴露原因。
