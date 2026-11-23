@@ -167,9 +167,8 @@ public partial class DataSession<TProvider>
         // UnnestArraysMaxRowsPerBatch（20000），避免对象重载与类型化重载出现两档批宽。
         int batchSize = useArrayForm
             ? UnnestArraysMaxRowsPerBatch
-            : Math.Min(
-                Math.Max(1, SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount),
-                SqlLimits.MaxRowsPerBatch);
+            : BatchPlan.RowsPerStatement(
+                TProvider.Dialect, tenantParamCount, parametersPerRow: 1, rowCap: SqlLimits.MaxRowsPerBatch);
         // v5.4 精炼 L1：事务骨架（复用/自开→commit/rollback→Restore→释放）收敛至
         // RunInTransactionScopeAsync 单点。两条形态各自一个作用域——数组形态不需要
         // 中转命令（scratch），共用作用域会为它白建一个命令（正是本次优化要消的固定开销）。
@@ -977,9 +976,8 @@ public partial class DataSession<TProvider>
                 // 参数恰好满批时越界 1 个，退回运行期协议层报错。与 BulkUpdateBatchAsync 的
                 // (driverLimit - tenantParams) 同口径（族内四处现已全扣）。
                 int singleStatementTenantParams = ctx.HasTenantFilter ? 1 : 0;
-                int rowsPerBatch = Math.Min(
-                    Math.Max(1, (SqlLimits.MaxBindParametersFor(TProvider.Dialect) - singleStatementTenantParams)
-                        / (ctx.SetColumnCount + 1)),
+                int rowsPerBatch = BatchPlan.RowsPerStatement(
+                    TProvider.Dialect, singleStatementTenantParams, ctx.SetColumnCount + 1,
                     MaxRowsPerUpdateBatchFor(form));
                 return await RunInTransactionScopeAsync(
                     operation.Owner,
@@ -1358,16 +1356,14 @@ public partial class DataSession<TProvider>
                     entities, metadata, ctx, tran, arrayElementTypes!, token),
                 ct).ConfigureAwait(false);
         }
-        // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite——原三元的 999 分支不可达。
-        const int driverLimit = SqlLimits.MaxBindParameters;
+        // ITM-640：SQLite 已在上方回退逐条路径，此处恒非 SQLite。
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
         // MySQL-7：MySQL 按服务端版本选 UPDATE JOIN VALUES ROW 形态（8.75×）+ 对应批宽
         BatchUpdateSqlBuilder.BatchUpdateForm form = await ResolveMySqlUpdateFormAsync(ct).ConfigureAwait(false);
         // BULK-001（2026-09-23）：再取单批行数上限——本路径在 MySQL 走 CASE WHEN 形态，
         // 文本按 O(行数×列数) 增长，仅受参数上限约束会生成 MB 级单语句。
-        int rowsPerBatch = Math.Min(
-            Math.Max(1, (driverLimit - tenantParams) / (ctx.SetColumnCount + 1)),
-            MaxRowsPerUpdateBatchFor(form));
+        int rowsPerBatch = BatchPlan.RowsPerStatement(
+            TProvider.Dialect, tenantParams, ctx.SetColumnCount + 1, MaxRowsPerUpdateBatchFor(form));
 
         // v5.4 精炼 L1：事务骨架收敛至 RunInTransactionScopeAsync。
         return await RunInTransactionScopeAsync(
@@ -1698,10 +1694,8 @@ public partial class DataSession<TProvider>
             if (form != BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow)
                 return null;
             int tenantParams = ctx.HasTenantFilter ? 1 : 0;
-            int rowsPerBatch = Math.Min(
-                Math.Max(1, (SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParams)
-                    / (ctx.SetColumnCount + 2)),
-                MaxRowsPerUpdateBatchFor(form));
+            int rowsPerBatch = BatchPlan.RowsPerStatement(
+                TProvider.Dialect, tenantParams, ctx.SetColumnCount + 2, MaxRowsPerUpdateBatchFor(form));
             total = await RunInTransactionScopeAsync(
                 operationOwner,
                 (tran, token) => ExecuteBulkUpdateBatchesVersionedAsync(
@@ -2197,9 +2191,8 @@ public partial class DataSession<TProvider>
         Action<object, long>? backfill = info.SetId;
 
         int columnCount = metadata.InsertColumns.Count;
-        int batchSize = Math.Max(1, Math.Min(
-            SqlLimits.MaxRowsPerBatch,
-            SqlLimits.MaxBindParametersFor(TProvider.Dialect) / columnCount));
+        int batchSize = BatchPlan.RowsPerStatement(
+            TProvider.Dialect, tenantParams: 0, columnCount, SqlLimits.MaxRowsPerBatch);
         string quotedTable = TProvider.QuoteIdentifier(insertTableName);
         string quotedPk = TProvider.QuoteIdentifier(pkColumn);
         // S1：引用列清单由 (TProvider, T) 唯一决定，每类型构建一次。
@@ -2453,10 +2446,8 @@ public partial class DataSession<TProvider>
         // 不扣——两分支语义各自正确，Math.Min 取较小者。此处 tenantGuarded（1347 行）尚未声明，
         // HasTenantFilter 现算无缓存（同 818 行注释口径），两处调用等值。
         int upsertTenantParams = HasTenantFilter<T>() ? 1 : 0;
-        int maxParametersPerStatement = Math.Min(
-            SqlLimits.MaxBindParametersFor(TProvider.Dialect) - upsertTenantParams,
-            maxRowsPerBatch * columnCount);
-        int batchSize = Math.Max(1, maxParametersPerStatement / columnCount);
+        int batchSize = BatchPlan.RowsPerStatement(
+            TProvider.Dialect, upsertTenantParams, columnCount, maxRowsPerBatch);
 
         // S1：表名与主键列取每类型静态视图（注册期快照，单调不可变）。
         EntityRuntimeInfo info = GetEntityInfoForCrud<T>();

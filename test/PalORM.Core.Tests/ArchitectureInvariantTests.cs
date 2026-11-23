@@ -290,4 +290,104 @@ public sealed class ArchitectureInvariantTests
                 $"Expected at least DataSession.cs and DataSession_Bulk.cs under {coreDir}, found {files.Length}.");
         return string.Join("\n", files.OrderBy(static f => f, StringComparer.Ordinal).Select(File.ReadAllText));
     }
+
+    /// <summary>列子集更新的旧生成器回退文件（D2 落地后此白名单应删除）。</summary>
+    private const string LegacyPartialUpdateFile = "DataSession.PartialUpdate.cs";
+
+    /// <summary>剥离注释后再做文本匹配（B13：门禁正则曾命中注释里的示例文本，把"文档提到"判成"代码在用"）。
+    /// <para>只处理行注释：整行注释直接丢弃，代码行内的 <c>//</c> 之后截断。字符串字面量内的
+    /// <c>//</c> 会被误截（如 URL），对本类扫描的两个模式无影响（模式本身不含 <c>//</c>）。</para></summary>
+    private static string StripComments(string source)
+    {
+        var builder = new System.Text.StringBuilder(source.Length);
+        foreach (string line in source.Split('\n'))
+        {
+            string trimmed = line.TrimStart();
+            if (trimmed.StartsWith("//", StringComparison.Ordinal))
+                continue;
+            int commentIndex = line.IndexOf("//", StringComparison.Ordinal);
+            builder.Append(commentIndex >= 0 ? line[..commentIndex] : line).Append('\n');
+        }
+        return builder.ToString();
+    }
+
+    /// <summary>批宽算式单一真源（2026-11-23，架构审查 D3/B224 族）。
+    /// <para>不变式：批量族的行数切分只能经 <see cref="BatchPlan.RowsPerStatement"/>，不得在
+    /// <c>DataSession_Bulk</c> 内就地写「参数上限 − 租户 / 每行参数」的算式。历史上同一
+    /// 「租户参数未扣减」off-by-one 被修过四次（ITM-809/883/884/r22），根因是算式有六份副本。</para></summary>
+    [Test]
+    public async Task BatchWidthFormula_OnlyInBatchPlan()
+    {
+        // 自检（验证验证者）：代码里的算式必须被抓，注释里的提及必须放行
+        string probeBad = "int rows = SqlLimits.MaxBindParametersFor(TProvider.Dialect) / cols;";
+        string probeGood = "// 见 SqlLimits.MaxBindParametersFor 的实测依据\nint rows = BatchPlan.RowsPerStatement(TProvider.Dialect, t, cols, cap);";
+        await Assert.That(string.Join(";", FindBatchWidthFormulas(probeBad, "probe.cs"))).Contains("probe.cs");
+        await Assert.That(string.Join(";", FindBatchWidthFormulas(probeGood, "probe.cs"))).IsEmpty();
+
+        string coreDir = FindCoreDir();
+        var violations = new List<string>();
+#pragma warning disable CA1849, S6966   // 源码扫描测试：同步读取与被测行为无关（同既有 Enter 族扫描）
+        foreach (string file in Directory.GetFiles(coreDir, "DataSession*.cs"))
+        {
+            violations.AddRange(FindBatchWidthFormulas(
+                File.ReadAllText(file), Path.GetFileName(file)));
+        }
+#pragma warning restore CA1849, S6966
+        await Assert.That(string.Join("\n", violations))
+            .IsEmpty()
+            .Because("批量行数切分必须经 BatchPlan.RowsPerStatement（单一真源）；"
+                + "就地写算式会重现 ITM-809 族 off-by-one 的多副本漂移");
+    }
+
+    private static List<string> FindBatchWidthFormulas(string source, string fileName)
+    {
+        string code = StripComments(source);
+        string[] patterns = ["SqlLimits.MaxBindParametersFor("];
+        return code.Split('\n')
+            .SelectMany((line, index) => patterns
+                .Where(pattern => line.Contains(pattern, StringComparison.Ordinal))
+                .Select(pattern =>
+                    $"{fileName}:{index + 1} 就地批宽算式（{pattern.TrimEnd('(', ';')}）"))
+            .ToList();
+    }
+
+    /// <summary>禁止（新增）反解生成器 SQL 文本（2026-11-23，D2 现状守卫）。
+    /// <para>不变式：<c>DataSession.PartialUpdate</c> 之外不得对生成 SQL 做
+    /// <c>LastIndexOf(" WHERE ")</c> 一类文本挖掘。该反模式在批量 UPDATE 已被 ITM-642 废弃
+    /// （改由生成物直接提供列清单），列子集更新一侧仍是旧生成器兼容回退，属**待收口**的既有例外；
+    /// 本门禁的作用是防止新增第二处，直到 D2 落地后把该例外一并移除。</para></summary>
+    [Test]
+    public async Task GeneratedSqlText_MustNotBeReverseParsedOutsideLegacySite()
+    {
+        string probeBad = "int where = fullSql.LastIndexOf(\" WHERE \", StringComparison.Ordinal);";
+        await Assert.That(string.Join(";", FindReverseParsing(probeBad, "Other.cs"))).Contains("Other.cs");
+        await Assert.That(string.Join(";", FindReverseParsing(probeBad, LegacyPartialUpdateFile))).IsEmpty();
+
+        string coreDir = FindCoreDir();
+        var violations = new List<string>();
+#pragma warning disable CA1849, S6966   // 源码扫描测试：同步读取与被测行为无关（同既有 Enter 族扫描）
+        foreach (string file in Directory.GetFiles(coreDir, "*.cs"))
+        {
+            violations.AddRange(FindReverseParsing(File.ReadAllText(file), Path.GetFileName(file)));
+        }
+#pragma warning restore CA1849, S6966
+        await Assert.That(string.Join("\n", violations))
+            .IsEmpty()
+            .Because("生成器 SQL 只允许按结构化元数据消费（ITM-642）；除 "
+                + LegacyPartialUpdateFile + " 的旧生成器回退外，禁止文本反解");
+    }
+
+    private static List<string> FindReverseParsing(string source, string fileName)
+    {
+        string code = StripComments(source);
+        // 旧生成器回退的既有例外（D2 落地后应一并移除并删掉本白名单）
+        if (string.Equals(fileName, LegacyPartialUpdateFile, StringComparison.Ordinal))
+            return [];
+        string[] patterns = ["LastIndexOf(\" WHERE \"", "LastIndexOf(\" AND \"", "LastIndexOf(\" = @p\""];
+        return code.Split('\n')
+            .SelectMany((line, index) => patterns
+                .Where(pattern => line.Contains(pattern, StringComparison.Ordinal))
+                .Select(pattern => $"{fileName}:{index + 1} 反解生成 SQL 文本（{pattern}）"))
+            .ToList();
+    }
 }
