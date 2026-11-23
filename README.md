@@ -36,7 +36,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 - **企业级横切**：多租户列隔离、乐观锁、软删除、审计拦截器、读写分离、咨询锁、弹性重试与熔断开箱即用。
 - **SQL 资产编译期管理**：`[SqlFile]` 嵌入并校验 .sql，`[SqlTemplate]` 把插值 SQL 常量化，AutoTagging 自动注入“文件:行号 成员”定位注释。
 - **运维与可观测**：健康检查、跨方言统一异常族、OpenTelemetry tracing 与 metrics 内置。
-- **方言专属能力**：PG 的 UNNEST、咨询锁、LISTEN/NOTIFY、pgvector 与 JSONB 路径查询，MySQL 的 local_infile 降级与 UPDATE JOIN，SQLite 的 AES-256 加密与 PRAGMA 自动调优。
+- **方言专属能力**：PG 的 UNNEST、咨询锁、LISTEN/NOTIFY、pgvector 与 JSONB 路径查询，MySQL 的 local_infile 降级与 UPDATE JOIN，SQLite 的驱动层 AES-256 静态加密与 PRAGMA 自动调优。
 - **Schema 与种子**：`MigrateAsync` 按外键拓扑序执行三方言 DDL，`SeedAsync` 事务内幂等种子，`ValidateSchemaAsync` 对照实体返回缺失列。
 - **零依赖核心**：PalORM.Core 不引用第三方 NuGet 包，仅 BCL 与 ADO.NET 抽象。
 
