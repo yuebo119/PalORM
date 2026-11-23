@@ -1451,14 +1451,26 @@ public partial class DataSession<TProvider>
     /// 参数创建量回到改前水平。</para>
     /// <para>参数名与顺序与 <see cref="BatchUpdateSqlBuilder"/> 的占位符逐位对应，由
     /// <c>BatchUpdateParameterContractTests</c> 锁定跨 Provider 契约。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "批次循环内叠加可选的版本令牌写入与逐批冲突校验分支；拆分会让批次索引与"
+            + "池布局契约跨方法传递（原两份内核各自豁免同一条）。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "内核输入 = 实体、元数据、批上下文、事务、批宽、形态与可选版本槽；"
+            + "聚合会为每次批量更新多一次分配。")]
     private async ValueTask<long> ExecuteBulkUpdateBatchesAsync<T>(
         IReadOnlyList<T> entities, CrudMetadata metadata, BatchUpdateContext ctx,
         DbTransaction tran, int rowsPerBatch,
-        BatchUpdateSqlBuilder.BatchUpdateForm form, CancellationToken ct)
-        where T : class, new()
-    {
+        BatchUpdateSqlBuilder.BatchUpdateForm form, CancellationToken ct,
+        VersionRowSlot? version = null)
+        where T : class, new()    {
+        // 版本化合一（2026-11-23，D3）：version 非 null 时每行多一个版本令牌槽，并按批校验
+        // 受影响行数。原为独立的 *Versioned 方法，与本体近乎逐字同构却已漂移（本体有
+        // BindUpdateValues 为 null 的 probe 回退、版本化版直接 ! 解引用），合一后只有一处维护面。
         int setColumnCount = ctx.SetColumnCount;
-        int paramsPerRow = setColumnCount + 1;
+        int versionSlots = version is null ? 0 : 1;
+        int paramsPerRow = setColumnCount + 1 + versionSlots;
         int tenantParams = ctx.HasTenantFilter ? 1 : 0;
         // 池按"本调用实际出现的最大批"建——输入不足一个满批时不为不存在的行预留
         int poolRows = Math.Min(rowsPerBatch, entities.Count);
@@ -1481,8 +1493,9 @@ public partial class DataSession<TProvider>
         string? lastBatchSql = null;
         int lastBatchLength = -1;
         long totalAffected = 0;
+        int batchIndex = 0;
 
-        for (int start = 0; start < entities.Count; start += rowsPerBatch)
+        for (int start = 0; start < entities.Count; start += rowsPerBatch, batchIndex++)
         {
             int end = Math.Min(start + rowsPerBatch, entities.Count);
             int batchLen = end - start;
@@ -1492,7 +1505,8 @@ public partial class DataSession<TProvider>
             {
                 lastBatchSql = BatchUpdateSqlBuilder.Build(
                     TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
-                    batchLen, ctx.HasTenantFilter, _tenantParameterName, form);
+                    batchLen, ctx.HasTenantFilter, _tenantParameterName, form,
+                    quotedConcurrencyColumn: version?.QuotedColumn);
                 lastBatchLength = batchLen;
                 AttachParameters(cmd, pool, rowParamCount, poolRowParamCount, tenantParams);
             }
@@ -1509,8 +1523,16 @@ public partial class DataSession<TProvider>
                 await BindRowValuesViaProbeAsync(
                     metadata, pool, entities, start, end, paramsPerRow).ConfigureAwait(false);
             }
+            if (version is { } versionSlot)
+            {
+                for (int i = start; i < end; i++)
+                    versionSlot.BindValue(pool, entities[i], (i - start) * paramsPerRow + setColumnCount + 1);
+            }
 
-            totalAffected += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
+            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
+            totalAffected += affectedRows;
+            if (version is not null)
+                VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
         }
 
         return totalAffected;
@@ -1564,14 +1586,26 @@ public partial class DataSession<TProvider>
     /// <summary>UNNEST 阶段 B：数组形态的批量 UPDATE 主体——每批把实体区间按列填进数组，一列一个参数，
     /// 语句文本跨批恒定（只依赖列数，与批宽无关）。
     /// <para>列数组按批容量预建一次、批间复用（与既有参数池的跨批复用同纪律 M1/PERF-004）；
-    /// 末批缩短时用短数组——UNNEST 按传入数组的实际长度展开，长度必须精确等于本批行数。</para></summary>
+    /// 末批缩短时用短数组——UNNEST 按传入数组的实际长度展开，长度必须精确等于本批行数。</para>
+    /// <para><b>版本化合一（2026-11-23，D3）</b>：<paramref name="version"/> 非 null 时多铺一列版本令牌
+    /// 数组，并按批校验受影响行数（乐观锁冲突）。原为独立的 <c>*Versioned</c> 方法，与本体逐字同构
+    /// 却已漂移（契约断言少 CommandFactoryEmitter 指引、null 诊断分叉），合一后只有一个维护面。</para></summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S3776:CognitiveComplexity",
+        Justification = "数组预建/填充、可选版本数组、参数赋值与逐批冲突校验在同一内核内顺序展开；"
+            + "拆分会让批次索引与数组长度契约跨方法传递（原两份内核各自豁免同一条，合并后仍为同一形态）。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
+        "S107:MethodsShouldNotHaveTooManyParameters",
+        Justification = "内核输入 = 实体、元数据、批上下文、事务、数组能力三件套与可选的版本数组槽；"
+            + "聚合对象会为每次批量更新多一次分配。")]
     private async Task<long> ExecuteBulkUpdateArrayBatchesAsync<T>(
         IReadOnlyList<T> entities,
         CrudMetadata metadata,
         BatchUpdateContext ctx,
         DbTransaction? tran,
         IReadOnlyList<Type> arrayElementTypes,
-        CancellationToken ct)
+        CancellationToken ct,
+        VersionArraySlot? version = null)
         where T : class, new()
     {
         Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpdateColumnArrays!;
@@ -1591,6 +1625,8 @@ public partial class DataSession<TProvider>
                 + "The generator and batch UPDATE SQL disagree; recompile the model assembly "
                 + "(see CommandFactoryEmitter.UpdateArrayColumns).");
         }
+        // 版本令牌占参数数组的最后一槽（列序 = SET 列 + 主键 + 版本）
+        int parameterCount = columnCount + (version is null ? 0 : 1);
         // 数组形态不受"语句内参数个数"约束（整批每列一个参数）。深挖轮批宽提升——
         // 5000→20000 实测 -36%（探针 B，见 UnnestArraysMaxRowsPerBatch）。
         int batchSize = UnnestArraysMaxRowsPerBatch;
@@ -1601,6 +1637,13 @@ public partial class DataSession<TProvider>
         int lastBatchLen = entities.Count % fullBatchLen;
         Array[] fullArrays = createArrays(fullBatchLen);
         Array[] shortArrays = lastBatchLen == 0 ? fullArrays : createArrays(lastBatchLen);
+        Array? fullVersionArray = null;
+        Array? shortVersionArray = null;
+        if (version is { } versionSlot)
+        {
+            fullVersionArray = versionSlot.CreateArray(fullBatchLen);
+            shortVersionArray = lastBatchLen == 0 ? fullVersionArray : versionSlot.CreateArray(lastBatchLen);
+        }
 
         await using DbCommand cmd = CreateCommand();
         cmd.Transaction = tran;
@@ -1609,11 +1652,12 @@ public partial class DataSession<TProvider>
             TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
             rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
             tenantParameterName: _tenantParameterName,
-            form: BatchUpdateSqlBuilder.BatchUpdateForm.UnnestArrays);
+            form: BatchUpdateSqlBuilder.BatchUpdateForm.UnnestArrays,
+            quotedConcurrencyColumn: version?.QuotedColumn);
 
         // 参数对象建一次（每列一个），批间只换 Value
-        var parameters = new DbParameter[columnCount];
-        for (int c = 0; c < columnCount; c++)
+        var parameters = new DbParameter[parameterCount];
+        for (int c = 0; c < parameterCount; c++)
         {
             parameters[c] = TProvider.CreateParameter(
                 BatchUpdateSqlBuilder.UnnestColumnParameterName(c), DBNull.Value);
@@ -1622,7 +1666,8 @@ public partial class DataSession<TProvider>
         BindDefaultFilterParameters<T>(cmd);
 
         long totalAffected = 0;
-        for (int start = 0; start < entities.Count; start += batchSize)
+        int batchIndex = 0;
+        for (int start = 0; start < entities.Count; start += batchSize, batchIndex++)
         {
             int batchLen = Math.Min(batchSize, entities.Count - start);
             Array[] columns = batchLen == fullBatchLen ? fullArrays : shortArrays;
@@ -1634,7 +1679,18 @@ public partial class DataSession<TProvider>
                 parameters[c].Value = RequireTypedArrayParameter(
                     c, columns[c], arrayElementTypes[c], batchLen).Value;
             }
-            totalAffected += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
+            if (version is { } slotForBatch)
+            {
+                Array versionArray = batchLen == fullBatchLen ? fullVersionArray! : shortVersionArray!;
+                slotForBatch.FillArray(entities, start, batchLen, versionArray);
+                parameters[columnCount].Value = RequireTypedArrayParameter(
+                    columnCount, versionArray, slotForBatch.ElementType, batchLen, "concurrency token").Value;
+            }
+
+            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
+            totalAffected += affectedRows;
+            if (version is not null)
+                VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
         }
         return totalAffected;
     }
@@ -1723,17 +1779,15 @@ public partial class DataSession<TProvider>
             increment(entities[i]);
     }
 
-    /// <summary>版本化 PG UNNEST 数组形态内核：每批填 SET 列 + 主键 + 版本列数组，语句文本跨批
-    /// 恒定。受影响数与批大小不等即按冲突/语义破坏抛出（见 <see cref="VerifyBatchConcurrencyRows{T}"/>）。</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
-        "S3776:CognitiveComplexity",
-        Justification = "数组预建/填充、版本数组、参数赋值与逐批冲突校验在同一内核内顺序展开；"
-            + "拆分会让批次索引与数组长度契约跨方法传递。")]
+    /// <summary>版本化数组形态的适配器（2026-11-23，D3 内核合一）：内核已并入
+    /// <see cref="ExecuteBulkUpdateArrayBatchesAsync{T}"/> 的可选槽 <see cref="VersionArraySlot"/>——
+    /// 原两份内核逐字同构、且已漂移（契约断言少 emitter 指引、null 诊断分叉）。保留本签名是为了
+    /// 让版本化路由的调用点只传业务参数，不暴露合并后的可选槽。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
-        Justification = "内核输入 = 实体、元数据、批上下文、事务、数组能力三件套、版本列名与取消令牌；"
-            + "聚合对象会为每次批量更新多一次分配。")]
-    private async Task<long> ExecuteBulkUpdateArrayBatchesVersionedAsync<T>(
+        Justification = "适配器签名沿用删除前的版本化内核（调用点零改动）；参数集合是业务输入，"
+            + "聚合会为一个纯转发方法引入多一次分配。")]
+    private Task<long> ExecuteBulkUpdateArrayBatchesVersionedAsync<T>(
         IReadOnlyList<T> entities,
         CrudMetadata metadata,
         BatchUpdateContext ctx,
@@ -1745,77 +1799,19 @@ public partial class DataSession<TProvider>
         Type versionElementType,
         CancellationToken ct)
         where T : class, new()
-    {
-        Action<IReadOnlyList<object>, int, int, Array[], int> fillArrays = metadata.FillUpdateColumnArrays!;
-        Func<int, Array[]> createArrays = metadata.CreateUpdateColumnArrays!;
-        int columnCount = arrayElementTypes.Count;
-        if (columnCount != ctx.SetColumnCount + 1)
-        {
-            throw new InvalidOperationException(
-                $"Type '{typeof(T).Name}': UNNEST array form expects {ctx.SetColumnCount + 1} column arrays "
-                + $"(SET columns + primary key) but the generated filler provides {columnCount}. "
-                + "The generator and batch UPDATE SQL disagree; recompile the model assembly.");
-        }
+        => ExecuteBulkUpdateArrayBatchesAsync(
+            entities, metadata, ctx, tran, arrayElementTypes, ct,
+            new VersionArraySlot(quotedVersionColumn, createVersionArray, fillVersionArray, versionElementType));
 
-        int batchSize = UnnestArraysMaxRowsPerBatch;
-        int fullBatchLen = Math.Min(batchSize, entities.Count);
-        int lastBatchLen = entities.Count % fullBatchLen;
-        Array[] fullArrays = createArrays(fullBatchLen);
-        Array[] shortArrays = lastBatchLen == 0 ? fullArrays : createArrays(lastBatchLen);
-        Array fullVersionArray = createVersionArray(fullBatchLen);
-        Array shortVersionArray = lastBatchLen == 0 ? fullVersionArray : createVersionArray(lastBatchLen);
-
-        await using DbCommand cmd = CreateCommand();
-        cmd.Transaction = tran;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-        cmd.CommandText = BatchUpdateSqlBuilder.Build(
-            TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
-            rowCount: 1, hasTenantFilter: ctx.HasTenantFilter,
-            tenantParameterName: _tenantParameterName,
-            form: BatchUpdateSqlBuilder.BatchUpdateForm.UnnestArrays,
-            quotedConcurrencyColumn: quotedVersionColumn);
-
-        int parameterCount = columnCount + 1;
-        var parameters = new DbParameter[parameterCount];
-        for (int c = 0; c < parameterCount; c++)
-        {
-            parameters[c] = TProvider.CreateParameter(
-                BatchUpdateSqlBuilder.UnnestColumnParameterName(c), DBNull.Value);
-            cmd.Parameters.Add(parameters[c]);
-        }
-        BindDefaultFilterParameters<T>(cmd);
-
-        long totalAffected = 0;
-        int batchIndex = 0;
-        for (int start = 0; start < entities.Count; start += batchSize, batchIndex++)
-        {
-            int batchLen = Math.Min(batchSize, entities.Count - start);
-            Array[] columns = batchLen == fullBatchLen ? fullArrays : shortArrays;
-            Array versionArray = batchLen == fullBatchLen ? fullVersionArray : shortVersionArray;
-            fillArrays(entities, start, batchLen, columns, 0);
-            fillVersionArray(entities, start, batchLen, versionArray);
-            for (int c = 0; c < columnCount; c++)
-            {
-                parameters[c].Value = RequireTypedArrayParameter(
-                    c, columns[c], arrayElementTypes[c], batchLen).Value;
-            }
-            parameters[columnCount].Value = RequireTypedArrayParameter(
-                columnCount, versionArray, versionElementType, batchLen, "concurrency token").Value;
-
-            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
-            totalAffected += affectedRows;
-            VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
-        }
-        return totalAffected;
-    }
-
-    /// <summary>版本化 MySQL JoinValuesRow 内核：参数池按行布局 SET 列 + 主键 + 版本令牌，
-    /// 每行只写 Value；受影响数按批校验。</summary>
+    /// <summary>版本化 VALUES 形态的适配器（2026-11-23，D3 内核合一）：内核已并入
+    /// <see cref="ExecuteBulkUpdateBatchesAsync{T}"/> 的可选槽 <see cref="VersionRowSlot"/>。
+    /// 顺带修掉原版漂移——版本化内核此前用 <c>BindUpdateValues!</c> 直接解引用，旧生成器程序集
+    /// 的 probe 回退路径不可达；合一后与本体共用同一条回退。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:MethodsShouldNotHaveTooManyParameters",
-        Justification = "内核输入 = 实体、元数据、批上下文、事务、批宽、形态、版本列名、版本绑定器"
-            + "与取消令牌；聚合对象会为每次批量更新多一次分配。")]
-    private async Task<long> ExecuteBulkUpdateBatchesVersionedAsync<T>(
+        Justification = "适配器签名沿用删除前的版本化内核（调用点零改动）；聚合会为一个纯转发方法"
+            + "引入多一次分配。")]
+    private Task<long> ExecuteBulkUpdateBatchesVersionedAsync<T>(
         IReadOnlyList<T> entities,
         CrudMetadata metadata,
         BatchUpdateContext ctx,
@@ -1826,59 +1822,9 @@ public partial class DataSession<TProvider>
         Action<DbParameter[], object, int> bindVersionValue,
         CancellationToken ct)
         where T : class, new()
-    {
-        int setColumnCount = ctx.SetColumnCount;
-        int paramsPerRow = setColumnCount + 2;
-        int tenantParams = ctx.HasTenantFilter ? 1 : 0;
-        int poolRows = Math.Min(rowsPerBatch, entities.Count);
-        int poolRowParamCount = poolRows * paramsPerRow;
-
-        await using DbCommand cmd = CreateCommand();
-        cmd.Transaction = tran;
-        cmd.CommandTimeout = _commandTimeoutSeconds;
-
-        DbParameter[] pool = BatchUpdateSqlBuilder.CreateParameterArray(
-            poolRowParamCount, ctx.HasTenantFilter, _tenantParameterName, _tenantId,
-            TProvider.CreateParameter);
-        metadata.InitUpdateParameters?.Invoke(pool, 0);
-        AttachParameters(cmd, pool, poolRowParamCount, poolRowParamCount, tenantParams);
-
-        Action<DbParameter[], object, int> valuesBinder = metadata.BindUpdateValues!;
-        string? lastBatchSql = null;
-        int lastBatchLength = -1;
-        long totalAffected = 0;
-        int batchIndex = 0;
-
-        for (int start = 0; start < entities.Count; start += rowsPerBatch, batchIndex++)
-        {
-            int end = Math.Min(start + rowsPerBatch, entities.Count);
-            int batchLen = end - start;
-            int rowParamCount = batchLen * paramsPerRow;
-
-            if (batchLen != lastBatchLength)
-            {
-                lastBatchSql = BatchUpdateSqlBuilder.Build(
-                    TProvider.Dialect, ctx.QuotedTable, ctx.QuotedPk, ctx.SetColumns,
-                    batchLen, ctx.HasTenantFilter, _tenantParameterName, form,
-                    quotedConcurrencyColumn: quotedVersionColumn);
-                lastBatchLength = batchLen;
-                AttachParameters(cmd, pool, rowParamCount, poolRowParamCount, tenantParams);
-            }
-            cmd.CommandText = lastBatchSql!;
-
-            for (int i = start; i < end; i++)
-            {
-                int offset = (i - start) * paramsPerRow;
-                valuesBinder(pool, entities[i], offset);
-                bindVersionValue(pool, entities[i], offset + setColumnCount + 1);
-            }
-
-            int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
-            totalAffected += affectedRows;
-            VerifyBatchConcurrencyRows<T>(affectedRows, batchLen, batchIndex);
-        }
-        return totalAffected;
-    }
+        => ExecuteBulkUpdateBatchesAsync(
+            entities, metadata, ctx, tran, rowsPerBatch, form, ct,
+            new VersionRowSlot(quotedVersionColumn, bindVersionValue)).AsTask();
 
     /// <summary>MySQL-7：批量 UPDATE 形态判定——MySQL 方言按服务端版本选
     /// <see cref="BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow"/>（UPDATE JOIN
@@ -2063,6 +2009,21 @@ public partial class DataSession<TProvider>
     {
         public int SetColumnCount => SetColumns.Length;
     }
+
+    /// <summary>版本化批量 UPDATE 的数组形态槽（D3 合一的载体，2026-11-23）：多铺一列版本令牌数组。
+    /// 非版本化实体不传（null）。<paramref name="QuotedColumn"/> 同时用于 SQL 的
+    /// <c>SET col = col + 1</c> 与 WHERE 的并发谓词（生成物已定列序，此处只透传）。</summary>
+    private readonly record struct VersionArraySlot(
+        string QuotedColumn,
+        Func<int, Array> CreateArray,
+        Action<IReadOnlyList<object>, int, int, Array> FillArray,
+        Type ElementType);
+
+    /// <summary>版本化批量 UPDATE 的 VALUES 形态槽：每行多一个版本令牌参数，由
+    /// <paramref name="BindValue"/> 写入池内对应偏移（偏移 = 行内起始 + SET 列数 + 1）。</summary>
+    private readonly record struct VersionRowSlot(
+        string QuotedColumn,
+        Action<DbParameter[], object, int> BindValue);
 
     /// <summary>批量 Upsert。整个输入在同一事务内执行，复用源生成写入元数据。
     /// <para><b>默认键行 ID 回填</b>：RETURNING 方言（PG/SQLite）的多行插入按主键升序重建
