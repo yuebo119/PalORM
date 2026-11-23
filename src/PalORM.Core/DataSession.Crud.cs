@@ -926,8 +926,12 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。
     /// 显式方言守卫：未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。
     /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="InsertCoreAsync"/> 完成
-    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填。</para></summary>
-    private static async ValueTask<T> InsertWithLastInsertIdAsync<T>(
+    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填。</para>
+    /// <para><b>TX-004 的 MySQL 通道</b>（2026-11-24 补）：回填必须走
+    /// <see cref="BackfillGeneratedId{TEntity}"/> 的延迟队列，与窄/整行 RETURNING 两路同口径；
+    /// 自开事务回滚后直接 <c>setId</c> 会让实体持有已不存在行的 ID。拿不到 ID 时与窄 RETURNING
+    /// 同样明确失败，不静默返回未回填实体。</para></summary>
+    private async ValueTask<T> InsertWithLastInsertIdAsync<T>(
         EntityRuntimeInfo info,
         DbCommand cmd, T entity, CancellationToken ct)
         where T : class, new()
@@ -940,8 +944,10 @@ public sealed partial class DataSession<TProvider>
         // PL-2：语句文本、超时与参数绑定已由 TryAcquireInsertCommand 完成——本方法只执行
         long? generatedId = NormalizeGeneratedId(
             await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
-        if (generatedId is long id && info.SetId is { } setId)
-            setId(entity, id);
+        if (generatedId is not { } id)
+            throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
+        if (info.SetId is { } setId)
+            BackfillGeneratedId(setId, entity, id);
         return entity;
     }
 

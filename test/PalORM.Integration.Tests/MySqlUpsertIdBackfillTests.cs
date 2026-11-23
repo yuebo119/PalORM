@@ -50,3 +50,44 @@ public sealed class MySqlUpsertIdEntity
     [Column("tenant_id")] public long TenantId { get; set; }
     [Column("name")] public string Name { get; set; } = "";
 }
+
+/// <summary>TX-004 的 MySQL 通道（2026-11-24 补）：LAST_INSERT_ID 回填此前绕过
+/// <c>BackfillGeneratedId</c> 的延迟队列，自开事务回滚后实体仍持有已不存在行的 ID；
+/// 再 SaveAsync 因 HasDefaultKey=false 走 UPSERT，静默打向不存在主键。
+/// SQLite 侧由 <c>InsertReturningNarrowTests.Insert_InsideOwnedTransaction_RollbackDoesNotBackfillId</c> 锁定。</summary>
+[NotInParallel("ExtBulkTable")]
+public sealed class MySqlInsertRollbackBackfillTests
+{
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task Insert_InsideOwnedTransaction_RollbackDoesNotBackfillLastInsertId()
+    {
+        await using var db = await TestDb.MySqlAsync();
+        try
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS probe_mysql_upsert_id");
+            await db.MigrateAsync();
+
+            db.WithTenant(1L);
+            var entity = new MySqlUpsertIdEntity { TenantId = 1, Name = "rollback" };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await db.WithTransaction(async ct =>
+                {
+                    await db.InsertAsync(entity, ct);
+                    throw new InvalidOperationException("rollback");
+                }));
+
+            await Assert.That(entity.Id).IsEqualTo(0)
+                .Because("自开事务回滚后实体不得持有已不存在行的 ID（TX-004）");
+
+            // 回滚后 Id 仍为默认键，Save 走 INSERT 分支并回填新 ID
+            MySqlUpsertIdEntity saved = await db.SaveAsync(entity);
+            await Assert.That(saved.Id).IsGreaterThan(0);
+        }
+        finally
+        {
+            await db.ExecuteAsync($"DROP TABLE IF EXISTS probe_mysql_upsert_id");
+        }
+    }
+}
