@@ -1896,8 +1896,9 @@ public sealed partial class DataSession<TProvider>
         where T : class, new()
     {
         int tenantParamCount = HasTenantFilter(info.Features) ? 1 : 0;
-        int batchSize = Math.Max(1, Math.Min(
-            SqlLimits.MaxBindParametersFor(TProvider.Dialect) - tenantParamCount, SqlLimits.MaxRowsPerBatch));
+        // 批宽经单一真源（BatchPlan）：每键 1 个参数，行数上限取 MaxRowsPerBatch
+        int batchSize = BatchPlan.RowsPerStatement(
+            TProvider.Dialect, tenantParamCount, parametersPerRow: 1, rowCap: SqlLimits.MaxRowsPerBatch);
 
         if (keys.Count <= batchSize)
         {

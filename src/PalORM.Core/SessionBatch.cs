@@ -33,7 +33,6 @@ public sealed class SessionBatch<TProvider> : IDisposable
     /// <para>值语义不变：FormattableString 是纯值载体（Append 后调用方无法改动其内容），
     /// 重复执行每次重建参数，与"每执行克隆一份"逐位等价。</para></summary>
     private readonly List<(string Sql, FormattableString? Values)> _statements = [];
-    private readonly DbCommand _scratch;
     /// <summary>Append 与执行期快照的互斥门（OPS-002，2026-09-22）——门内只做 List 增删与拷贝，
     /// 不做 await（本仓库"lock 内无 await"纪律）。</summary>
     private readonly Lock _gate = new();
@@ -42,7 +41,6 @@ public sealed class SessionBatch<TProvider> : IDisposable
     internal SessionBatch(DataSession<TProvider> session)
     {
         _session = session;
-        _scratch = session.CreateCommandForBatch();
     }
 
     /// <summary>追加一条非查询语句（编译期参数化）。可链式。</summary>
@@ -253,28 +251,29 @@ public sealed class SessionBatch<TProvider> : IDisposable
     }
 
     /// <summary>把一条语句的实参物化为参数并加入目标集合（step14，2026-10-03）。
-    /// <para>参数对象从 scratch 命令创建（驱动同型：scratch 由会话连接创建，批量/回退命令同连接）；
-    /// 参数对象不可跨集合共享，故每次执行都新建——这与原实现"Append 建一份 + 执行克隆一份"的
-    /// 值语义一致，但把两次分配压成一次。命名与单条路径同纪律（@p0 起、值只进 @pN）。</para>
+    /// <para><b>参数工厂走 Provider（2026-11-23，语义分叉收口）</b>：原实现用 scratch 命令的驱动工厂
+    /// 建对象后逐个写值，跳过 <see cref="IDbProvider.CreateParameter"/> 的方言归一——PostgreSQL 的
+    /// <c>DateTime</c> 归一与 <c>timestamptz</c> 类型声明都在那里（ADR-X DEC-4），批量语句因此
+    /// 与单条路径不一致。统一到 Provider 工厂后，两条路径的参数类型与值语义同源。</para>
+    /// <para>命名与单条路径同纪律（@p0 起、值只进 @pN）。</para>
     /// <para><paramref name="values"/> 为 null 表示无参语句（<see cref="AppendRaw"/>）。</para></summary>
-    private void AddParameters(DbParameterCollection target, FormattableString? values)
+    private static void AddParameters(DbParameterCollection target, FormattableString? values)
     {
         if (values is null)
             return;
         for (int i = 0; i < values.ArgumentCount; i++)
         {
-            DbParameter parameter = _scratch.CreateParameter();
-            parameter.ParameterName = QueryBuilder<object>.GetParameterName(i);
-            parameter.Value = values.GetArgument(i) ?? DBNull.Value;
-            target.Add(parameter);
+            target.Add(TProvider.CreateParameter(
+                QueryBuilder<object>.GetParameterName(i), values.GetArgument(i)));
         }
     }
 
-    /// <summary>释放 scratch 命令。已追加语句随实例废弃；未执行的语句不会到达服务器。</summary>
+    /// <summary>释放句柄。已追加语句随实例废弃；未执行的语句不会到达服务器。
+    /// <para>2026-11-23：原实现在构造期建一条 scratch 命令专供参数工厂，改用
+    /// <see cref="IDbProvider.CreateParameter"/> 后该命令已无用途，随之移除（每条批量少一次命令分配）。</para></summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _scratch.Dispose();
     }
 }

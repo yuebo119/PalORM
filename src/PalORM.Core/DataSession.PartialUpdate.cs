@@ -141,10 +141,15 @@ public sealed partial class DataSession<TProvider>
         return selected;
     }
 
-    /// <summary>构建列子集 UPDATE 全句——从生成的全列 UPDATE 中提取 WHERE 子句（主键 +
-    /// 并发令牌谓词）与版本列引用，重编号参数后按 (T, 方言, 选中列集, 租户位) 缓存。
-    /// <para><b>格式依赖</b>：生成器的 UPDATE 恒为 <c>UPDATE … SET … WHERE …</c>，并发令牌
-    /// 谓词是 WHERE 的最后一个 <c>AND</c> 分支。列子集不同只改 SET 段，WHERE 文本结构稳定。</para></summary>
+    /// <summary>构建列子集 UPDATE 全句——按 (T, 方言, 选中列集, 租户位) 缓存。
+    /// <para><b>结构化优先（2026-11-23，D2）</b>：主键与并发令牌列取自注册表元数据
+    /// （<see cref="EntityRuntimeInfo.PkColumn"/> / <see cref="EntityRuntimeInfo.ConcurrencyColumn"/>），
+    /// WHERE 参数序与生成物的 <c>BindUpdateWhere</c> 绑定序一致（先主键、后并发令牌，
+    /// 见 <c>CommandFactoryEmitter.GenerateBindUpdateWhereBody</c>）。不再从全列 UPDATE 文本里
+    /// 反解 WHERE 与版本列：那依赖生成器文本形态，形态一变即抛，且与 ITM-642 在批量侧已废弃的
+    /// 反模式同型。</para>
+    /// <para><b>回退面</b>：无单一主键（复合主键）或「有版本绑定但无列名」时退回文本反解
+    /// <see cref="BuildLegacyPartialUpdateSql{T}"/>，覆盖边缘实体形态与旧生成器程序集。</para></summary>
     private static string GetPartialUpdateSql<T>(
         EntityRuntimeInfo info, CrudPlan plan, SortedSet<int> selected, bool tenantFiltered)
         where T : class, new()
@@ -154,6 +159,59 @@ public sealed partial class DataSession<TProvider>
         if (DataSessionCache.PartialUpdateSqlCache.TryGetValue(cacheKey, out string? cached))
             return cached;
 
+        string built = TryBuildStructuredPartialUpdate(info, plan, selected, tenantFiltered, out string structured)
+            ? structured
+            : BuildLegacyPartialUpdateSql<T>(info, plan, selected, tenantFiltered);
+        DataSessionCache.TryAddPartialUpdateSql(cacheKey, built);
+        return built;
+    }
+
+    /// <summary>结构化构造：SET 列按选中序重编号，WHERE = 主键（+ 并发令牌）谓词，参数编号从
+    /// 「选中 SET 列数」起连续——与 <c>UpdateColumnsEntryAsync</c> 的 <c>bindWhere(entity, cmd, parameterIndex)</c>
+    /// 逐位对应。</summary>
+    private static bool TryBuildStructuredPartialUpdate(
+        EntityRuntimeInfo info, CrudPlan plan, SortedSet<int> selected, bool tenantFiltered,
+        out string sql)
+    {
+        sql = "";
+        if (info.PkColumn is not { Length: > 0 } pkColumn)
+            return false;
+        bool hasVersion = plan.IncrementVersion is not null;
+        if (hasVersion && info.ConcurrencyColumn is not { Length: > 0 })
+            return false;
+
+        int newIndex = 0;
+        var setItems = new string[selected.Count];
+        foreach (int oldIndex in selected)
+        {
+            setItems[newIndex] =
+                $"{TProvider.QuoteIdentifier(plan.UpdateColumns[oldIndex])} = {ParameterNameCache.GetName(newIndex)}";
+            newIndex++;
+        }
+
+        string where = $" WHERE {TProvider.QuoteIdentifier(pkColumn)} = {ParameterNameCache.GetName(selected.Count)}";
+        string versionSet = "";
+        if (hasVersion)
+        {
+            string quotedVersion = TProvider.QuoteIdentifier(info.ConcurrencyColumn!);
+            where += $" AND {quotedVersion} = {ParameterNameCache.GetName(selected.Count + 1)}";
+            versionSet = $", {quotedVersion} = {quotedVersion} + 1";
+        }
+        string tenantSuffix = tenantFiltered
+            ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
+            : "";
+        sql = $"UPDATE {TProvider.QuoteIdentifier(info.TableName)} SET {string.Join(", ", setItems)}"
+            + $"{versionSet}{where}{tenantSuffix}";
+        return true;
+    }
+
+    /// <summary>旧路径：从生成的全列 UPDATE 文本反解 WHERE 与版本列（复合主键与旧生成器程序集回退）。
+    /// <para><b>格式依赖</b>：生成器的 UPDATE 恒为 <c>UPDATE … SET … WHERE …</c>，并发令牌
+    /// 谓词是 WHERE 的最后一个 <c>AND</c> 分支。列子集不同只改 SET 段，WHERE 文本结构稳定。</para></summary>
+    private static string BuildLegacyPartialUpdateSql<T>(
+        EntityRuntimeInfo info, CrudPlan plan, SortedSet<int> selected, bool tenantFiltered)
+        where T : class, new()
+    {
         CommandSqlSet sqls = GetCommandSqls<T>();
         string fullSql = sqls.Update;
         if (fullSql.Length == 0)
@@ -201,10 +259,7 @@ public sealed partial class DataSession<TProvider>
         string tenantSuffix = tenantFiltered
             ? $" AND {TProvider.QuoteIdentifier("tenant_id")} = {_tenantParameterName}"
             : "";
-        string built =
-            $"UPDATE {TProvider.QuoteIdentifier(info.TableName)} SET {string.Join(", ", setItems)}" +
+        return $"UPDATE {TProvider.QuoteIdentifier(info.TableName)} SET {string.Join(", ", setItems)}" +
             $"{versionSet}{rewrittenWhere}{tenantSuffix}";
-        DataSessionCache.TryAddPartialUpdateSql(cacheKey, built);
-        return built;
     }
 }

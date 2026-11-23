@@ -17,6 +17,20 @@ internal interface IQuerySessionResilience
     /// <para>PG/MySQL 的 <see cref="IDbProvider.MarkConnectionStateUnknown"/> 默认是空操作，
     /// 只有会话级标记才能让池化租出路径执行 <c>RESET ALL</c>/<c>COM_RESET_CONNECTION</c>。</para></summary>
     void MarkRawSqlStateUnknown(DbConnection connection);
+
+    /// <summary>连接判死置位（LINQ 栈的失败路径）：命中 <see cref="IDbProvider.IsConnectionFailure"/>
+    /// 才置位，其余异常无副作用（过滤在实现内）。
+    /// <para><b>为什么需要</b>：LINQ 栈用裸连接建命令（不经会话的 <c>CreateCommand</c>），
+    /// 不置位则判死标记恒为 0，重建永不触发——外部 kill 连接后同一会话持续失败。
+    /// 与直查栈/批量/裸连接族的既有实现同一入口。</para></summary>
+    void MarkConnectionPoisoned(Exception exception);
+
+    /// <summary>取执行用主连接：已判死则<b>先重建再返回会话当前的连接</b>。
+    /// <para><b>为什么不能直接用 builder 快照</b>：<see cref="QueryBuilder{T}"/> 在
+    /// <c>From&lt;T&gt;()</c> 时缓存连接快照，判死重建会整体替换会话的 <c>_conn</c>——
+    /// 快照因此指向已释放连接。本成员返回会话现值，是「单条命令失败一次、下一次操作自愈」
+    /// 语义在 LINQ 栈的落点，与直查栈经 <c>CreateCommand</c> 重建同口径。</para></summary>
+    DbConnection GetPrimaryConnectionForExecution();
 }
 
 /// <summary>类型安全链式查询构建器——struct（值类型）。
@@ -894,7 +908,13 @@ public struct QueryBuilder<T> where T : class, new()
         // reader）——作用域本身就是"我要并行读"的声明，故不要求显式 ForRead()。
         if (GetActiveTransaction() is not null || writeOperation
             || (!_useReadRoute && !_operationState.ParallelReadsEnabled))
-            return ValueTask.FromResult(_conn);
+        {
+            // FLT-5（2026-11-23）：主连接经会话取现值而非用构造期快照——判死重建会替换会话的
+            // _conn，快照随之失效。同步分支零分配语义不变（两条 ValueTask.FromResult）。
+            return _session is { } session
+                ? ValueTask.FromResult(session.GetPrimaryConnectionForExecution())
+                : ValueTask.FromResult(_conn);
+        }
 
         return AcquireRoutedConnectionAsync(cancellationToken);
     }

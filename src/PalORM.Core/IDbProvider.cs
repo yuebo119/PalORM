@@ -49,6 +49,16 @@ public interface IDbProvider
     /// <summary>创建 DbParameter。避免 QueryBuilder.Where() 中 CreateCommand() 资源泄漏。</summary>
     static abstract DbParameter CreateParameter(string name, object? value);
 
+    /// <summary>执行前对<b>已绑定</b>参数做方言归一（值级）。默认无操作。
+    /// <para><b>为什么需要它</b>：<see cref="CreateParameter"/> 的归一只在「创建参数时值已知」才生效。
+    /// 写入路径有两类情形绕过它：①生成 binder 用 <c>cmd.CreateParameter()</c>（驱动工厂）建参后
+    /// 再逐个写 <c>Value</c>（单条 Insert/Update/Delete）；②参数池先建对象（值为
+    /// <see cref="DBNull"/>），值由 binder 在逐行循环里填（批量 UPDATE/UPSERT）。PostgreSQL 的
+    /// DateTime→UTC 归一（ADR-X DEC-4）因此对这两类通路失效，<c>Kind=Local</c> 会被
+    /// <c>timestamptz</c> 拒绝并抛 <c>InvalidCastException</c>。</para>
+    /// <para>把归一挂到执行叶子，覆盖全部写入口且不依赖生成物新增元数据；重复归一必须幂等。</para></summary>
+    static virtual void NormalizeCommandParameters(DbCommand command) { }
+
     /// <summary>创建<b>数组</b>参数（2026-10-02，UNNEST 形态用）。
     /// <para><b>元素类型由 <paramref name="values"/> 的运行时元素类型推断</b>——生成物构造的是
     /// 类型化数组（<c>long[]</c>/<c>string[]</c>/…），数组元素类型即参数类型；调用方无需另传
