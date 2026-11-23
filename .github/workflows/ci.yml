@@ -4,7 +4,9 @@ name: Build & Test
 
 on:
     push:
-        branches: [dev, main]
+        # 2026-11-23 去重：dev 的每次提交原先 push 与 PR 各跑一遍完整验证（同 SHA 双 run，
+        # 实测各 8~9 分钟）。dev 走 PR 验证即可，push 只保留 main（合并后确认 merge commit）。
+        branches: [main]
     pull_request:
         branches: [dev, main]
     # 每周一定时运行（03:00 UTC）：带变异探针的强化验证只在定时/手动触发时执行，
@@ -12,6 +14,11 @@ on:
     schedule:
         - cron: '0 3 * * 1'
     workflow_dispatch:
+
+# 同一 ref 连续推送时取消旧 run：只保留最新提交的结论，旧 run 的结论已被取代。
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
 
 jobs:
     verify:
