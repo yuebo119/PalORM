@@ -1635,13 +1635,8 @@ public partial class DataSession<TProvider>
             {
                 // ITM-894：能力检测与执行不一致（探测非 null 而满批 null）时给显式诊断，
                 // 对齐 BulkDelete BuildArrayParameter 的消息形态（原 null 断言直接 NRE 无信息）
-                parameters[c].Value = (TProvider.CreateTypedArrayParameter(
-                    BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
-                    columns[c], arrayElementTypes[c])
-                    ?? throw new InvalidOperationException(
-                        $"Provider '{TProvider.Name}' returned a null typed array parameter for "
-                        + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
-                        + "the capability probe and the execution path disagree.")).Value;
+                parameters[c].Value = RequireTypedArrayParameter(
+                    c, columns[c], arrayElementTypes[c], batchLen).Value;
             }
             totalAffected += await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
         }
@@ -1807,21 +1802,11 @@ public partial class DataSession<TProvider>
             fillVersionArray(entities, start, batchLen, versionArray);
             for (int c = 0; c < columnCount; c++)
             {
-                parameters[c].Value = (TProvider.CreateTypedArrayParameter(
-                    BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
-                    columns[c], arrayElementTypes[c])
-                    ?? throw new InvalidOperationException(
-                        $"Provider '{TProvider.Name}' returned a null typed array parameter for "
-                        + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
-                        + "the capability probe and the execution path disagree.")).Value;
+                parameters[c].Value = RequireTypedArrayParameter(
+                    c, columns[c], arrayElementTypes[c], batchLen).Value;
             }
-            parameters[columnCount].Value = (TProvider.CreateTypedArrayParameter(
-                BatchUpdateSqlBuilder.UnnestColumnParameterName(columnCount),
-                versionArray, versionElementType)
-                ?? throw new InvalidOperationException(
-                    $"Provider '{TProvider.Name}' returned a null typed array parameter for "
-                    + $"the concurrency token (element type '{versionElementType.Name}', "
-                    + $"batch length {batchLen}); the capability probe and the execution path disagree.")).Value;
+            parameters[columnCount].Value = RequireTypedArrayParameter(
+                columnCount, versionArray, versionElementType, batchLen, "concurrency token").Value;
 
             int affectedRows = await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             totalAffected += affectedRows;
@@ -2053,6 +2038,27 @@ public partial class DataSession<TProvider>
             cmd.Parameters.Add(pool[i]);
         if (tenantParams > 0)
             cmd.Parameters.Add(pool[poolRowParamCount]);
+    }
+
+    /// <summary>取类型化数组参数；Provider 返回 null 时的显式诊断——「能力检测与执行不一致」
+    /// 的唯一文案真源（ITM-894 族：三处数组执行体曾各写一份逐字相同的消息）。
+    /// <para><b>零分配纪律</b>：文案只在 null 分支构造，正常路径不付插值成本——数组执行体处于
+    /// 每批热路径，按批构造诊断串会成为固定开销。</para>
+    /// <para><paramref name="role"/> 为 null 时文案为 <c>element type 'X' (batch length N)</c>；
+    /// 非 null 时插入角色（并发令牌列）并按该列既有文案拼接，两处文本逐字保持不变。</para></summary>
+    private static DbParameter RequireTypedArrayParameter(
+        int parameterIndex, Array values, Type elementType, int batchLength, string? role = null)
+    {
+        DbParameter? parameter = TProvider.CreateTypedArrayParameter(
+            BatchUpdateSqlBuilder.UnnestColumnParameterName(parameterIndex), values, elementType);
+        if (parameter is not null)
+            return parameter;
+        string subject = role is null
+            ? $"element type '{elementType.Name}' (batch length {batchLength})"
+            : $"the {role} (element type '{elementType.Name}', batch length {batchLength})";
+        throw new InvalidOperationException(
+            $"Provider '{TProvider.Name}' returned a null typed array parameter for {subject}; "
+            + "the capability probe and the execution path disagree.");
     }
 
     /// <summary>批量 UPDATE 上下文（避免方法参数过多 S107）。
@@ -2757,13 +2763,8 @@ public partial class DataSession<TProvider>
             for (int c = 0; c < columnCount; c++)
             {
                 // ITM-894：同 Update 执行体——null 时显式诊断（对齐 BuildArrayParameter）
-                parameters[c].Value = (TProvider.CreateTypedArrayParameter(
-                    BatchUpdateSqlBuilder.UnnestColumnParameterName(c),
-                    columns[c], arrayElementTypes[c])
-                    ?? throw new InvalidOperationException(
-                        $"Provider '{TProvider.Name}' returned a null typed array parameter for "
-                        + $"element type '{arrayElementTypes[c].Name}' (batch length {batchLen}); "
-                        + "the capability probe and the execution path disagree.")).Value;
+                parameters[c].Value = RequireTypedArrayParameter(
+                    c, columns[c], arrayElementTypes[c], batchLen).Value;
             }
             await ExecuteRowsWithPoisonAsync(cmd, ct).ConfigureAwait(false);
             processed += batchLen;
