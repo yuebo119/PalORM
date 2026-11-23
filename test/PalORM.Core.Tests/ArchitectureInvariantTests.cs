@@ -361,28 +361,38 @@ public sealed class ArchitectureInvariantTests
     {
         string probeBad = "int where = fullSql.LastIndexOf(\" WHERE \", StringComparison.Ordinal);";
         await Assert.That(string.Join(";", FindReverseParsing(probeBad, "Other.cs"))).Contains("Other.cs");
-        await Assert.That(string.Join(";", FindReverseParsing(probeBad, LegacyPartialUpdateFile))).IsEmpty();
 
         string coreDir = FindCoreDir();
         var violations = new List<string>();
+        int legacyHits = 0;
 #pragma warning disable CA1849, S6966   // 源码扫描测试：同步读取与被测行为无关（同既有 Enter 族扫描）
         foreach (string file in Directory.GetFiles(coreDir, "*.cs"))
         {
-            violations.AddRange(FindReverseParsing(File.ReadAllText(file), Path.GetFileName(file)));
+            string name = Path.GetFileName(file);
+            string source = File.ReadAllText(file);
+            if (string.Equals(name, LegacyPartialUpdateFile, StringComparison.Ordinal))
+            {
+                legacyHits += FindReverseParsing(source, name).Count;
+                continue;
+            }
+            violations.AddRange(FindReverseParsing(source, name));
         }
 #pragma warning restore CA1849, S6966
         await Assert.That(string.Join("\n", violations))
             .IsEmpty()
             .Because("生成器 SQL 只允许按结构化元数据消费（ITM-642）；除 "
                 + LegacyPartialUpdateFile + " 的旧生成器回退外，禁止文本反解");
+
+        // 棘轮：白名单文件内也只允许既有的 3 处（WHERE / AND / = @p 各一处）。
+        // D2 已让单一主键实体走结构化元数据；复合主键回退仍用这 3 处，彻底落地后应降为 0。
+        await Assert.That(legacyHits).IsEqualTo(3)
+            .Because(LegacyPartialUpdateFile + " 的反解点是棘轮常量：新增一处即失败，"
+                + "彻底结构化（复合主键）后应把期望值同步下调直至 0");
     }
 
     private static List<string> FindReverseParsing(string source, string fileName)
     {
         string code = StripComments(source);
-        // 旧生成器回退的既有例外（D2 落地后应一并移除并删掉本白名单）
-        if (string.Equals(fileName, LegacyPartialUpdateFile, StringComparison.Ordinal))
-            return [];
         string[] patterns = ["LastIndexOf(\" WHERE \"", "LastIndexOf(\" AND \"", "LastIndexOf(\" = @p\""];
         return code.Split('\n')
             .SelectMany((line, index) => patterns
