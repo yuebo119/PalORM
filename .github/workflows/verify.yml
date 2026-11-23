@@ -109,9 +109,13 @@ jobs:
                   global-json-file: global.json
 
             - name: Download test binaries
+              # upload-artifact 会剥掉 path 的公共前缀（artifact 内是 PalORM.Core.Tests/...，
+              # 不含 test/），故下载目标必须显式落到 test/，否则 dotnet run 找不到 apphost
+              # （run 45157347874 实测：No such file or directory .../test/PalORM.Core.Tests/bin/...）。
               uses: actions/download-artifact@v8
               with:
                   name: test-binaries
+                  path: test/
 
             - name: Install dotnet-coverage (M3-1)
               run: dotnet tool install -g dotnet-coverage
@@ -195,6 +199,7 @@ jobs:
               uses: actions/download-artifact@v8
               with:
                   name: test-binaries
+                  path: test/
 
             - name: Install dotnet-coverage (M3-1)
               run: dotnet tool install -g dotnet-coverage
