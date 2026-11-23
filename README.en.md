@@ -42,7 +42,7 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 - **Schema and seeding**: `MigrateAsync` runs three-dialect DDL in foreign-key topological order, `SeedAsync` seeds idempotently inside a transaction, and `ValidateSchemaAsync` reports missing columns against entity declarations.
 - **Zero-dependency core**: PalORM.Core references no third-party NuGet packages, only BCL and ADO.NET abstractions.
 
-> **Audit boundary**: `IQueryInterceptor` covers SELECT, QueryBuilder UPDATE, and `ExecuteAsync`. Entity Insert/Delete/Save, the Bulk family, stored procedures, and multi-result sets bypass interceptors. For write auditing, use database-level auditing or OpenTelemetry.
+> **Audit boundary**: `IQueryInterceptor` covers SELECT, QueryBuilder UPDATE, `ExecuteAsync`, and `QueryPipeline`. Entity Insert/Update/Delete/Save, the Bulk family, stored procedures, and multi-result sets bypass interceptors. For write auditing, use database-level auditing or OpenTelemetry.
 
 ## 🆚 Comparison with mainstream ORMs
 

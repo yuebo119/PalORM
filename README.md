@@ -40,7 +40,7 @@ Roslyn 源生成器在编译期产出 SQL 构造、参数绑定、对象映射�
 - **Schema 与种子**：`MigrateAsync` 按外键拓扑序执行三方言 DDL，`SeedAsync` 事务内幂等种子，`ValidateSchemaAsync` 对照实体返回缺失列。
 - **零依赖核心**：PalORM.Core 不引用第三方 NuGet 包，仅 BCL 与 ADO.NET 抽象。
 
-> **审计边界**：`IQueryInterceptor` 覆盖 SELECT、QueryBuilder UPDATE 与 `ExecuteAsync`；实体 Insert/Delete/Save、Bulk 家族、存储过程与多结果集不经过拦截器。写入审计请使用数据库层审计或 OpenTelemetry。
+> **审计边界**：`IQueryInterceptor` 覆盖 SELECT、QueryBuilder UPDATE、`ExecuteAsync` 与 `QueryPipeline`；实体 Insert/Update/Delete/Save、Bulk 家族、存储过程与多结果集不经过拦截器。写入审计请使用数据库层审计或 OpenTelemetry。
 
 ## 🆚 与主流 ORM 对比
 
