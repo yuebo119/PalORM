@@ -244,9 +244,10 @@ Notes: all 9 groups come from a single batch, so ratios are only comparable with
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- or PalORM.MySql / PalORM.Sqlite -->
+<PackageReference Include="PalORM.SourceGen" Version="6.9.0" PrivateAssets="all" />
 ```
 
-The package brings `PalORM.Core` and `PalORM.SourceGen`; six steps below, full patterns and decision tables in [Best practices](docs/最佳实践.md).
+The provider package brings `PalORM.Core` and the driver; the source generator must be referenced separately (`PalORM.SourceGen` with `PrivateAssets="all"` so it does not flow downstream). Six steps below, full patterns and decision tables in [Best practices](docs/最佳实践.md).
 
 ### Define an entity
 

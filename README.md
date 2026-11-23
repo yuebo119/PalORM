@@ -267,9 +267,10 @@ dotnet run --project tools/PalORM.PerfCli -c Release -- crossbench
 
 ```xml
 <PackageReference Include="PalORM.PostgreSql" Version="6.9.0" />   <!-- 或 PalORM.MySql / PalORM.Sqlite -->
+<PackageReference Include="PalORM.SourceGen" Version="6.9.0" PrivateAssets="all" />
 ```
 
-包内含 `PalORM.Core` 与 `PalORM.SourceGen`；六步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
+Provider 包自动带入 `PalORM.Core` 与驱动；源生成器须另行引用 `PalORM.SourceGen`（`PrivateAssets="all"` 使它不流向下游）。六步跑通，完整写法与决策项见[最佳实践](docs/最佳实践.md)。
 
 ### 定义实体
 
