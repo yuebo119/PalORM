@@ -306,7 +306,7 @@ await using var db = await DataSession<PostgreSqlProvider>.CreateAsync(new DbOpt
 ```csharp
 var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
 
-await using var db = await pool.RentAsync();   // DisposeAsync 即归还，不关闭物理连接
+await using var db = await pool.RentAsync();   // DisposeAsync 即归还；池满或池已释放时降级为真实释放并关闭物理连接
 ```
 
 ### 建表与种子
@@ -326,7 +326,7 @@ var all   = await db.From<User>().Where($"email LIKE {"%@example.com%"}").ToList
 
 alice.Email = "new@example.com";
 await db.UpdateAsync(alice);            // 乐观锁实体自动校验版本，冲突抛 ConcurrencyConflictException
-await db.SaveAsync(alice);              // 默认主键走 Insert，非默认主键单行 UPSERT
+await db.SaveAsync(alice);              // 默认主键走 Insert，非默认主键单行 UPSERT（[ConcurrencyCheck] 实体抛 NotSupportedException）
 await db.DeleteAsync<User>(alice.Id);   // 软删实体自动转 UPDATE
 ```
 

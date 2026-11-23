@@ -283,7 +283,7 @@ For per-request sessions (web/API), prefer `DataSessionPool`: the session, conne
 ```csharp
 var pool = DataSessionPool<PostgreSqlProvider>.Create(options, maxIdleSize: 16);
 
-await using var db = await pool.RentAsync();   // DisposeAsync returns it to the pool
+await using var db = await pool.RentAsync();   // DisposeAsync returns it to the pool; when the pool is full or disposed it degrades to a real release and closes the physical connection
 ```
 
 ### Migrate and seed
@@ -303,7 +303,7 @@ var all   = await db.From<User>().Where($"email LIKE {"%@example.com%"}").ToList
 
 alice.Email = "new@example.com";
 await db.UpdateAsync(alice);            // optimistic-lock entities verify the version; conflicts throw ConcurrencyConflictException
-await db.SaveAsync(alice);              // default key inserts, non-default key does a single-row UPSERT
+await db.SaveAsync(alice);              // default key inserts, non-default key does a single-row UPSERT ([ConcurrencyCheck] entities throw NotSupportedException)
 await db.DeleteAsync<User>(alice.Id);   // soft-delete entities become an UPDATE
 ```
 
