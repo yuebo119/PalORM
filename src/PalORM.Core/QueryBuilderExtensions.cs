@@ -48,7 +48,8 @@ public static class QueryBuilderExtensions
         DbTransaction? BoundTransaction,
         Func<DbConnection, bool, ValueTask>? ReadConnReturner,
         bool SyncRowRead,
-        bool SyncIo) where T : class, new();
+        bool SyncIo,
+        IQuerySessionResilience? Session) where T : class, new();
 
     /// <summary>S4：弹性编排的只读上下文（从 builder 一次投影，helper 状态机不再持有 builder）。</summary>
     internal readonly record struct ResilienceContext(
@@ -118,13 +119,21 @@ public static class QueryBuilderExtensions
     }
 
     /// <summary>S4：连接获取（与 QueryBuilder.AcquireExecutionConnectionAsync 同语义，
-    /// 但只依赖状态字段，不捕获 builder）。</summary>
+    /// 但只依赖状态字段，不捕获 builder）。
+    /// <para><b>FLT-5（2026-11-23）</b>：主连接经会话取现值而非用构造期快照——判死重建会替换
+    /// 会话的 <c>_conn</c>，快照随之失效；会话缺失（理论上的非 From&lt;T&gt;() 构造）退回快照。</para></summary>
     private static ValueTask<DbConnection> AcquireExecutionConnectionAsync<T>(
         in QueryExecutionState<T> state, CancellationToken token) where T : class, new()
         => state.BoundTransaction is not null
             || (!state.UseReadRoute && !state.OperationState.ParallelReadsEnabled)
-            ? ValueTask.FromResult(state.PrimaryConnection)
+            ? AcquirePrimaryConnection(state)
             : state.ReadConnProvider!(token);
+
+    private static ValueTask<DbConnection> AcquirePrimaryConnection<T>(in QueryExecutionState<T> state)
+        where T : class, new()
+        => state.Session is { } session
+            ? ValueTask.FromResult(session.GetPrimaryConnectionForExecution())
+            : ValueTask.FromResult(state.PrimaryConnection);
 
     /// <summary>D7：单次尝试的 MySQL 命令超时判定（与 <see cref="CommandTimeoutNormalizer"/> 同口径）。
     /// <para><b>为什么挂在每次尝试内而不是整条管线外</b>：重试后成功的操作不应因累计耗时被判超时——
@@ -433,7 +442,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo, builder._session);
         string outcome = "error";
         try
         {
@@ -463,6 +472,9 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // FLT-5（2026-11-23）：LINQ 栈用裸连接建命令，不经会话的 CreateCommand——不在此置位
+            // 则判死标记恒 0、重建永不触发（过滤在实现内，非连接故障无副作用）。
+            builder._session?.MarkConnectionPoisoned(exception);
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
             if (readConnInvalidator is not null && resilience.IsTransientException(exception))
                 await readConnInvalidator().ConfigureAwait(false);
@@ -514,7 +526,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo, builder._session);
         string outcome = "error";
         try
         {
@@ -541,6 +553,9 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // FLT-5（2026-11-23）：LINQ 栈用裸连接建命令，不经会话的 CreateCommand——不在此置位
+            // 则判死标记恒 0、重建永不触发（过滤在实现内，非连接故障无副作用）。
+            builder._session?.MarkConnectionPoisoned(exception);
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
             if (readConnInvalidator is not null && resilience.IsTransientException(exception))
                 await readConnInvalidator().ConfigureAwait(false);
@@ -696,7 +711,7 @@ public static class QueryBuilderExtensions
             builder._take, builder._prepared, DbOptions.ToCommandTimeoutSeconds(builder._commandTimeout), builder._dialect, builder._queryCache,
             builder._cacheKey, builder._cacheTtl, builder._cacheTenantScope,
             sql, parameters, builder._paramFactory, context, interceptors, swStart, boundTransaction,
-            builder._readConnReturner, builder._syncRowRead, builder._syncIo);
+            builder._readConnReturner, builder._syncRowRead, builder._syncIo, builder._session);
         string outcome = "error";
         try
         {
@@ -722,6 +737,9 @@ public static class QueryBuilderExtensions
         {
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // FLT-5（2026-11-23）：LINQ 栈用裸连接建命令，不经会话的 CreateCommand——不在此置位
+            // 则判死标记恒 0、重建永不触发（过滤在实现内，非连接故障无副作用）。
+            builder._session?.MarkConnectionPoisoned(exception);
             // READ-001（2026-09-23）：读路由下瞬时故障即丢弃会话缓存的读连接。
             if (readConnInvalidator is not null && resilience.IsTransientException(exception))
                 await readConnInvalidator().ConfigureAwait(false);
@@ -776,6 +794,10 @@ public static class QueryBuilderExtensions
             builder._operationState.EnterReadOnly();
         var paged = builder.CloneForExecution();
         paged._useReadRoute = false;
+        // FLT-5（2026-11-23）：分页路径全程直用 paged._conn（建事务/建批/建命令），不经
+        // AcquireExecutionConnectionAsync——此处刷新为会话现值，否则判死重建后仍用旧快照。
+        if (paged._session is { } pagedSession)
+            paged._conn = pagedSession.GetPrimaryConnectionForExecution();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
         if (paged._skip.HasValue)
             throw new InvalidOperationException(
@@ -883,6 +905,8 @@ public static class QueryBuilderExtensions
         catch (Exception exception)
         {
             primaryException = exception;
+            // FLT-5（2026-11-23）：分页路径全程直用 paged._conn（不经 CreateCommand），判死须在此置位。
+            builder._session?.MarkConnectionPoisoned(exception);
             if (ownsTransaction
                 && (!commitAttempted
                     || !TransactionCleanup.TrySkipRollbackAfterCommitFailure(
@@ -1127,6 +1151,8 @@ public static class QueryBuilderExtensions
             observation?.Complete(exception is OperationCanceledException && ct.IsCancellationRequested
                 ? "cancelled"
                 : "error");
+            // FLT-5（2026-11-23）：QueryMultiple 的 reader 打开失败同样要置判死（不经 CreateCommand）。
+            builder._session?.MarkConnectionPoisoned(exception);
             // READ-001（2026-09-23）：同 SELECT 管线——读路由瞬时故障丢弃会话缓存的读连接
             if (builder.GetResilience().IsTransient(exception))
                 await builder.InvalidateReadConnectionAsync().ConfigureAwait(false);
@@ -1272,6 +1298,8 @@ public static class QueryBuilderExtensions
             // ITM-513: 与 SELECT 管线一致——取消归类 cancelled，任何异常都通知拦截器 OnError
             if (exception is OperationCanceledException && ct.IsCancellationRequested)
                 outcome = "cancelled";
+            // FLT-5（2026-11-23）：写路径（ExecuteNonQuery/ExecuteDelete）判死置位。
+            builder._session?.MarkConnectionPoisoned(exception);
             NotifyInterceptorsOnError(interceptors, context, exception);
             // L4：超时归一——MySQL ExecuteNonQuery 超时抛 MySqlException，归一为 TimeoutException
             if (CommandTimeoutNormalizer.NormalizeOnce(exception, startTimestamp, timeoutSeconds) is { } mapped)
@@ -1315,6 +1343,8 @@ public static class QueryBuilderExtensions
             observation?.Complete(exception is OperationCanceledException && cancellationToken.IsCancellationRequested
                 ? "cancelled"
                 : "error");
+            // FLT-5（2026-11-23）：分页标量（COUNT）判死置位——分页路径直用会话连接快照。
+            builder._session?.MarkConnectionPoisoned(exception);
             throw;
         }
     }

@@ -704,6 +704,16 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     int IQuerySessionResilience.ResilienceGeneration => ResilienceGeneration;
     void IQuerySessionResilience.MarkRawSqlStateUnknown(DbConnection connection)
         => MarkConnectionStateUnknownForRawSql(connection);
+    void IQuerySessionResilience.MarkConnectionPoisoned(Exception exception)
+        => MarkConnectionPoisoned(exception);
+    DbConnection IQuerySessionResilience.GetPrimaryConnectionForExecution()
+    {
+        // FLT-5（2026-11-23）：LINQ 栈的判死重建。此前重建只挂在 CreateCommand 上，而 LINQ 栈
+        // 用裸连接建命令（QueryBuilderExtensions 全文件零 CreateCommand 调用），判死标记也从不
+        // 置位，两条路都断——外部 kill 连接后该会话的 From<T>() 查询持续失败。
+        RebuildConnectionIfNeeded();
+        return _conn;
+    }
 
     /// <summary>使用会话级弹性策略执行操作（自动重试+熔断）。
     /// <para><b>并发契约（OPS-001，2026-09-23）</b>：本入口<b>不占操作门禁</b>——它是给调用方
@@ -1407,8 +1417,10 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// 这里在下次建命令前按会话既有配方重建物理连接：CreateConnection → Open → Provider 初始化
     /// （SQLite PRAGMA）→ 会话级 SQL。重建失败时保留判死标记并抛出，不静默无限重建。
     /// <para><b>覆盖范围</b>：置位发生在标量读（<c>ExecuteReadScalarAsync</c> 与 <c>ScalarEntryAsync</c>
-    /// 的兜底 catch）与写路径（<c>ExecuteWriteRowsAsync</c>）；重建挂在 <see cref="CreateCommand(System.Data.Common.DbTransaction?)"/> 上，
-    /// 而所有建命令路径（读/写/批量/DDL/原始 SQL）都经过它，命令因此总是拿到重建后的连接。
+    /// 的兜底 catch）与写路径（<c>ExecuteWriteRowsAsync</c>）；重建有两个入口——直查/CRUD/批量/DDL
+    /// 经 <see cref="CreateCommand(System.Data.Common.DbTransaction?)"/>，LINQ 栈经
+    /// <see cref="IQuerySessionResilience.GetPrimaryConnectionForExecution"/>（FLT-5，2026-11-23：
+    /// 该栈用裸连接建命令，不经 CreateCommand，此前两条路都断，判死标记恒 0 且重建永不触发）。
     /// 重建走 <see cref="IDbProvider.InitializeConnection"/>（同步初始化钩子，与异步版内容等价，
     /// 两处必须同步维护）——同步路径由 G20/G24 把守，不允许在库里阻塞异步调用。</para></summary>
     private void RebuildConnectionIfNeeded()
