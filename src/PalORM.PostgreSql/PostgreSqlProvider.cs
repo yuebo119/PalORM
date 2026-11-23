@@ -243,18 +243,32 @@ public sealed class PostgreSqlProvider : IDbProvider
         return 0;
     }
 
+    /// <summary>DEC-4（ADR-X）：DateTime 归一 UTC——与 timestamptz 列语义一致（Local 转 UTC 时刻，
+    /// Unspecified 按 UTC 标记），避免本地时区静默偏移。</summary>
+    private static object? NormalizeDateTime(object? value)
+    {
+        if (value is not DateTime dt || dt.Kind == DateTimeKind.Utc)
+            return value;
+        return dt.Kind == DateTimeKind.Local
+            ? dt.ToUniversalTime()
+            : new DateTime(dt.Ticks, DateTimeKind.Utc);
+    }
+
     /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。
-    /// <para><b>R5（2026-09-21）：显式 DbType</b>——<c>new NpgsqlParameter(name, object)</c> 对装箱的
+    /// <para><b>R5（2026-09-21）：显式类型</b>——<c>new NpgsqlParameter(name, object)</c> 对装箱的
     /// 值类型<b>不做类型映射</b>，NpgsqlDbType 落在 Unknown，服务端按 text 推断，于是
     /// <c>WHERE "Id" = @p0</c>（@p0 是装箱 long）报 "operator does not exist: text = bigint"。
     /// 该路径覆盖所有手写 SQL 的 Where 条件与原始 SQL 入口，属跨方言通用缺陷
-    /// （MySQL/SQLite 容忍弱类型故未暴露）。</para></summary>
+    /// （MySQL/SQLite 容忍弱类型故未暴露）。</para>
+    /// <para><b>DateTime 显式声明 TimestampTz（2026-11-23）</b>：本仓 PG 的 DateTime 列恒为
+    /// <c>timestamptz</c>（DEC-4）。原映射为 <c>DbType.DateTime</c>（timestamp 无时区），单条命令因
+    /// 服务端隐式转换"看起来能用"，但转换按<b>会话时区</b>解释无偏移文本，TZ 非 UTC 的部署会静默
+    /// 偏移；<c>DbBatch</c>（<see cref="SessionBatch{TProvider}"/>）在客户端做严格类型解析，直接抛
+    /// "Could not bind parameter ... to PostgreSQL type 'timestamp with time zone'"。
+    /// 改为显式 <c>NpgsqlDbType.TimestampTz</c>：两条路径类型一致，且不再依赖会话时区。</para></summary>
     public static DbParameter CreateParameter(string name, object? value)
     {
-        // DEC-4（ADR-X）：DateTime 归一 UTC——与 timestamptz 列语义一致（Local 转 UTC 时刻，
-        // Unspecified 按 UTC 标记），避免本地时区静默偏移。
-        if (value is DateTime dt && dt.Kind != DateTimeKind.Utc)
-            value = dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : new DateTime(dt.Ticks, DateTimeKind.Utc);
+        value = NormalizeDateTime(value);
         var parameter = new NpgsqlParameter(name, value ?? DBNull.Value);
         // 仅对已知基元显式映射——未知类型留给驱动推断（保持既有行为）。
         // C1（2026-10-01 全 API 逐项轮）：case 频率重排——int/long/string/Guid 等高频类型前置
@@ -267,7 +281,9 @@ public sealed class PostgreSqlProvider : IDbProvider
             case string: parameter.DbType = System.Data.DbType.String; break;
             case Guid: parameter.DbType = System.Data.DbType.Guid; break;
             case bool: parameter.DbType = System.Data.DbType.Boolean; break;
-            case DateTime: parameter.DbType = System.Data.DbType.DateTime; break;
+            // DEC-4：DateTime 在 PG 上表示 UTC 时刻，列型 timestamptz——显式声明 TimestampTz，
+            // 不依赖服务端按会话时区做 timestamp→timestamptz 隐式转换（DbBatch 下该转换不可用）
+            case DateTime: parameter.NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.TimestampTz; break;
             case decimal: parameter.DbType = System.Data.DbType.Decimal; break;
             case double: parameter.DbType = System.Data.DbType.Double; break;
             case short: parameter.DbType = System.Data.DbType.Int16; break;

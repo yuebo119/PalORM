@@ -2513,7 +2513,7 @@ public partial class DataSession<TProvider>
         cmd.CommandTimeout = _commandTimeoutSeconds;
         int fullRowCount = Math.Min(batchSize, entities.Count);
         int tenantParams = CountTenantParams(tenantGuarded);
-        var pool = CreateUpsertParameterPool<T>(cmd, fullRowCount, columnCount, tenantGuarded);
+        var pool = CreateUpsertParameterPool<T>(fullRowCount, columnCount, tenantGuarded);
         // N4（2026-10-04 全量复读）：可空/byte[] 列的 DbType 提示建池后一次性建立——原由
         // BindUpsertValues 每行重写（池存续期内恒定，纯冗余）。旧生成器程序集 Init 委托为
         // null：不调，其 BindUpsertValues 保持自写 DbType 的旧形态（B21 对 INSERT 池的同款契约）。
@@ -2583,7 +2583,7 @@ public partial class DataSession<TProvider>
 
         int tenantParams = CountTenantParams(tenantGuarded);
         // PARAM-REUSE-OK[pool:pool] 池建后只写 Value（BindUpsertValues/scratch 契约），无集合变更
-        DbParameter[] pool = CreateUpsertParameterPool<T>(cmd, 1, columnCount, tenantGuarded);
+        DbParameter[] pool = CreateUpsertParameterPool<T>(1, columnCount, tenantGuarded);
         metadata.InitUpsertParameters?.Invoke(pool, 0);
         for (int i = 0; i < columnCount + tenantParams; i++)
         {
@@ -2634,19 +2634,19 @@ public partial class DataSession<TProvider>
     private static int CountTenantParams(bool tenantGuarded) => tenantGuarded ? 1 : 0;
 
     /// <summary>批量 UPSERT 参数池：[行参数 fullRowCount×columnCount][租户参数?]——
-    /// 池尾租户参数槽与 BulkUpdate 的 AttachParameters 契约同构。</summary>
-    private System.Data.Common.DbParameter[] CreateUpsertParameterPool<T>(
-        DbCommand cmd, int fullRowCount, int columnCount, bool tenantGuarded)
+    /// 池尾租户参数槽与 BulkUpdate 的 AttachParameters 契约同构。
+    /// <para><b>参数工厂走 Provider（2026-11-23，语义分叉收口）</b>：原用 <c>cmd.CreateParameter()</c>
+    /// （驱动工厂）+ 逐个写 <c>ParameterName</c>，与同文件 UPDATE 池
+    /// （<see cref="BatchUpdateSqlBuilder.CreateParameterArray"/> 传 <c>TProvider.CreateParameter</c>）
+    /// 两套工厂并存。统一到 Provider 工厂，参数类型与方言实现同源；值仍在 bind 期写入，
+    /// 故 Provider 的「创建时值归一」（PG DateTime→UTC）在这里不生效——该缺口见后续项。</para></summary>
+    private DbParameter[] CreateUpsertParameterPool<T>(int fullRowCount, int columnCount, bool tenantGuarded)
         where T : class, new()
     {
         int rowParamCount = fullRowCount * columnCount;
-        var pool = new System.Data.Common.DbParameter[rowParamCount + (tenantGuarded ? 1 : 0)];
+        var pool = new DbParameter[rowParamCount + (tenantGuarded ? 1 : 0)];
         for (int i = 0; i < rowParamCount; i++)
-        {
-            System.Data.Common.DbParameter parameter = cmd.CreateParameter();
-            parameter.ParameterName = QueryBuilder<T>.GetParameterName(i);
-            pool[i] = parameter;
-        }
+            pool[i] = TProvider.CreateParameter(QueryBuilder<T>.GetParameterName(i), DBNull.Value);
         if (tenantGuarded)
             pool[rowParamCount] = TProvider.CreateParameter(_tenantParameterName, _tenantId!);
         return pool;

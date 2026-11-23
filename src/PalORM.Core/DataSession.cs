@@ -1380,13 +1380,21 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return new SessionBatch<TProvider>(this);
     }
 
-    internal DbCommand CreateCommandForBatch() => CreateCommand();
-
     internal SessionOperationState.SessionOperationLease EnterBatchOperation(
         object? operationOwner = null)
         => EnterOperation(operationOwner);
 
-    internal DbConnection BatchConnection => _conn;
+    /// <summary>批处理族的主连接取用口——判死则先重建再返回会话现值（FLT-5 同口径，2026-11-23）。
+    /// <para>原为裸字段转发（<c>=&gt; _conn</c>）；SessionBatch 构造期曾借 scratch 命令间接触发
+    /// 重建，scratch 移除后该副作用一并消失，故在此显式承担，避免批量族成为判死自愈的盲区。</para></summary>
+    internal DbConnection BatchConnection
+    {
+        get
+        {
+            RebuildConnectionIfNeeded();
+            return _conn;
+        }
+    }
 
     internal DbTransaction? GetActiveBatchTransaction() => GetActiveTransaction();
 
