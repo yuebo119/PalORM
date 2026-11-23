@@ -39,32 +39,6 @@ jobs:
         permissions:
             contents: write # 用于创建 GitHub Release
             id-token: write # Trusted Publishing（OIDC）：NuGet/login@v1 凭 GitHub OIDC 令牌换取短效 NuGet API key（2026-11-23 接入，替代过期退役的静态 NUGET_API_KEY）
-        services:
-            postgres:
-                image: postgres:18
-                env:
-                    POSTGRES_HOST_AUTH_METHOD: trust
-                    POSTGRES_DB: palorm
-                ports:
-                    - 5432:5432
-                options: >-
-                    --health-cmd "pg_isready -U postgres -d palorm"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 20
-            mysql:
-                image: mysql:8.4
-                env:
-                    MYSQL_ALLOW_EMPTY_PASSWORD: yes
-                    MYSQL_DATABASE: palorm
-                ports:
-                    - 3306:3306
-                options: >-
-                    --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 20
-
         steps:
             - uses: actions/checkout@v7
               with:
@@ -107,18 +81,10 @@ jobs:
                   dotnet build PalORM.ci.slnf -c Release --no-restore --no-incremental
                   -warnaserror
 
-            - name: Unit tests
-              run: |
-                  dotnet run --project test/PalORM.Core.Tests -c Release --no-build --no-restore
-                  dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --no-restore
-
-            - name: Integration tests (PostgreSQL + MySQL)
-              env:
-                  PALORM_PG_CONNECTION: Host=127.0.0.1;Username=postgres;Database=palorm
-                  PALORM_MYSQL_CONNECTION: Server=127.0.0.1;User=root;Database=palorm
-              run: |
-                  dotnet run --project test/PalORM.Integration.Tests -c Release --no-build --no-restore
-
+            # 2026-11-23 去重：单元与集成测试曾在此重跑一遍，而 needs 的 verify 已跑过
+            # 同一套（Core + SourceGen + Integration，含覆盖率与计数地板断言，且构建同为
+            # Release -warnaserror）。发布前唯一需要重做的是 Pack 所需的 Release 构建产物，
+            # 测试结论由 verify 承担（单一真源）。实测省约 5 分钟。
             - name: Verify CHANGELOG entry (before pack)
               # M1-3：唯一有真断言的发布校验前置到 pack/push 之前（原"Verify Release
               # Accuracy"位于 push 之后——其数字回显经 $(...) 捕获时 grep 空匹配 echo 恒
