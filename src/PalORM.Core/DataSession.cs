@@ -1508,6 +1508,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     // 命中 IsConnectionFailure 即置位（MarkConnectionPoisoned 内置过滤，不误伤其他异常）。
     internal async ValueTask<int> ExecuteRowsWithPoisonAsync(DbCommand command, CancellationToken ct)
     {
+        // DEC-4 兜底面（2026-11-23）：批量/单条写入的 binder 绕过 CreateParameter 的创建期归一，
+        // 执行前统一补一次（幂等；非 PG 方言为空实现，闭式泛型下不产生调用）。
+        TProvider.NormalizeCommandParameters(command);
         try { return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
     }
@@ -1855,9 +1858,13 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     /// <para>Provider 覆写 <see cref="IDbProvider.PreferSynchronousIo"/> 时走同步叶子
     /// （进程内引擎的异步 API 本就是同步执行，异步形态只多付脚手架）。</para></summary>
     private static ValueTask<int> ExecuteRowsCoreAsync(DbCommand command, CancellationToken ct)
-        => TProvider.PreferSynchronousIo
+    {
+        // DEC-4 兜底面（2026-11-23）：单条写入的生成 binder 用驱动工厂建参，绕过创建期归一。
+        TProvider.NormalizeCommandParameters(command);
+        return TProvider.PreferSynchronousIo
             ? new ValueTask<int>(ExecuteRowsSync(command, ct))
             : new ValueTask<int>(command.ExecuteNonQueryAsync(ct));
+    }
 
     private static int ExecuteRowsSync(DbCommand command, CancellationToken ct)
     {

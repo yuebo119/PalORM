@@ -254,6 +254,57 @@ public sealed class PostgreSqlProvider : IDbProvider
             : new DateTime(dt.Ticks, DateTimeKind.Utc);
     }
 
+    /// <summary>执行前归一已绑定参数（DEC-4 的兜底面，2026-11-23）：<see cref="IDbProvider.NormalizeCommandParameters"/>。
+    /// <para>只处理 <c>DateTime</c>（单值）与 <c>DateTime[]</c>（UNNEST 数组形态的元素），其余原样；
+    /// 已归一的值原样返回，故重复调用幂等。<c>DateTimeOffset</c> 自带偏移，不需要归一。</para>
+    /// <para><b>成本</b>：每命令 O(参数个数) 的类型检查。单条 CRUD 是个位到十位数；批量 VALUES 形态
+    /// 按批付一次（相对该批的往返与解析成本可忽略）；UNNEST 数组形态每列一个参数，仅数组元素需要
+    /// 逐元归一，且全 Utc 时直接返回原数组不复制。</para></summary>
+    public static void NormalizeCommandParameters(DbCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        DbParameterCollection parameters = command.Parameters;
+        int count = parameters.Count;
+        if (count == 0)
+            return;
+        for (int i = 0; i < count; i++)
+        {
+            DbParameter parameter = parameters[i];
+            switch (parameter.Value)
+            {
+                case DateTime value when value.Kind != DateTimeKind.Utc:
+                    parameter.Value = NormalizeDateTime(value);
+                    break;
+                case DateTime[] array:
+                    parameter.Value = NormalizeDateTimeArray(array);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    /// <summary>逐元归一 DateTime 数组；全 Utc 时返回原实例（不复制）。</summary>
+    private static DateTime[] NormalizeDateTimeArray(DateTime[] values)
+    {
+        bool needsNormalization = false;
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (values[i].Kind != DateTimeKind.Utc)
+            {
+                needsNormalization = true;
+                break;
+            }
+        }
+        if (!needsNormalization)
+            return values;
+
+        var normalized = new DateTime[values.Length];
+        for (int i = 0; i < values.Length; i++)
+            normalized[i] = (DateTime)NormalizeDateTime(values[i])!;
+        return normalized;
+    }
+
     /// <summary>创建 NpgsqlParameter;value 为 null 时转为 <see cref="DBNull.Value"/>(ADO.NET 中 null 参数值不会被发送)。
     /// <para><b>R5（2026-09-21）：显式类型</b>——<c>new NpgsqlParameter(name, object)</c> 对装箱的
     /// 值类型<b>不做类型映射</b>，NpgsqlDbType 落在 Unknown，服务端按 text 推断，于是

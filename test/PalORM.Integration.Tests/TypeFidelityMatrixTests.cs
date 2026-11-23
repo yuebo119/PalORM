@@ -255,14 +255,21 @@ public sealed class TypeFidelityMatrixTests
     {
         if (IsPg(dialect))
         {
-            // Npgsql 契约：timestamptz 只接受 Utc / offset 0（客户端拒绝；Npgsql 11 起该
-            // 拒绝由 ArgumentException 改为包 InvalidCastException，Matches 穿透内层匹配）。
-            if (c.Dt.Kind != DateTimeKind.Utc) return new(true, "ArgumentException", null);
+            // DEC-4（ADR-X）：PG 的 DateTime 一律表示 UTC 时刻——Kind=Local 转 UTC 时刻，
+            // Unspecified 视为 UTC，列型统一 timestamptz。故非 Utc 输入**不再被拒绝**，
+            // 读回的是换算后的 UTC 时刻（2026-11-23 起写叶子对所有参数补归一，池路径一并生效；
+            // 此前该矩阵断言的是归一尚未覆盖写入时的旧契约）。
             if (c.Dto.Offset != TimeSpan.Zero) return new(true, "ArgumentException", null);
+            DateTime expectedUtc = c.Dt.Kind switch
+            {
+                DateTimeKind.Local => c.Dt.ToUniversalTime(),
+                DateTimeKind.Unspecified => DateTime.SpecifyKind(c.Dt, DateTimeKind.Utc),
+                _ => c.Dt
+            };
             // Npgsql 默认把 DateTime.MinValue/MaxValue 映射为 PG 的 ±infinity，读回 Kind=Unspecified。
             DateTime dt = c.Dt == DateTime.MinValue || c.Dt == DateTime.MaxValue
                 ? DateTime.SpecifyKind(c.Dt, DateTimeKind.Unspecified)
-                : DateTime.SpecifyKind(TruncateToMicrosecond(c.Dt), DateTimeKind.Utc);
+                : DateTime.SpecifyKind(TruncateToMicrosecond(expectedUtc), DateTimeKind.Utc);
             return new(false, "", new TfTemporalEntity
             {
                 Id = 1,
