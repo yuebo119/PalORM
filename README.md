@@ -399,5 +399,7 @@ var env  = DbOptions.FromEnvironment("PALORM_CONNECTION");    // 环境变量（
 
 [Apache-2.0](LICENSE)
 
-v6.7.0 及以前的已发布版本仍为 AGPL-3.0-only；<br>
-v6.8.0 及以后的新版本统一变更为 Apache-2.0 发布。
+许可按发布版本划分，不按代码引入时间划分：
+
+- v6.7.0 及更早的已发布版本：AGPL-3.0-only（已发布的授权不因后续换证而撤销）
+- v6.8.0 及以后的已发布版本：Apache-2.0（覆盖该版本的全部源码，含 6.7 之前继承的代码）
