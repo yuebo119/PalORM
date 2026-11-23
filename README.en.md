@@ -42,8 +42,6 @@ Deep docs: [Best practices](docs/最佳实践.md) · [Feature panorama](docs/功
 - **Schema and seeding**: `MigrateAsync` runs three-dialect DDL in foreign-key topological order, `SeedAsync` seeds idempotently inside a transaction, and `ValidateSchemaAsync` reports missing columns against entity declarations.
 - **Zero-dependency core**: PalORM.Core has no third-party runtime dependencies; code uses only the BCL, ADO.NET abstractions, and the logging abstraction in the shared framework. Build time adds only SourceLink and SonarAnalyzer (both `PrivateAssets=all`, absent from consumer dependencies).
 
-> **Audit boundary**: `IQueryInterceptor` covers QueryBuilder SELECT (ToList/First/Single/ForEach/paging), UPDATE and DELETE, plus `DataSession.ExecuteAsync` and `QueryPipeline`. Entity `Get`/`GetAll`/`QueryAsync`/`ScalarAsync`, entity Insert/Update/Delete/Save, the Bulk family, stored procedures, and multi-result sets bypass interceptors. For write auditing, use database-level auditing or OpenTelemetry.
-
 ## 🆚 Comparison with mainstream ORMs
 
 > Versions (verified 2026-11-22): PalORM 6.9.0 · Dapper 2.1.100 + Dapper.AOT 1.1.0 · EF Core 10.0.14 · RepoDb 1.17.0.

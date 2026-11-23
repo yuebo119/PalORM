@@ -40,8 +40,6 @@ Roslyn 源生成器在编译期产出实体 CRUD 的 SQL、参数绑定、对象
 - **Schema 与种子**：`MigrateAsync` 按外键拓扑序执行三方言 DDL，`SeedAsync` 事务内幂等种子，`ValidateSchemaAsync` 对照实体返回缺失列。
 - **零依赖核心**：PalORM.Core 无第三方运行时依赖，代码只用 BCL、ADO.NET 抽象与共享框架内的日志抽象；构建期仅 SourceLink 与 SonarAnalyzer（均为 `PrivateAssets=all`，不进消费方依赖）。
 
-> **审计边界**：`IQueryInterceptor` 覆盖 QueryBuilder 的 SELECT（ToList/First/Single/ForEach/分页）、UPDATE 与 DELETE，以及 `DataSession.ExecuteAsync` 与 `QueryPipeline`；实体 `Get`/`GetAll`/`QueryAsync`/`ScalarAsync`、实体 Insert/Update/Delete/Save、Bulk 家族、存储过程与多结果集不经过拦截器。写入审计请使用数据库层审计或 OpenTelemetry。
-
 ## 🆚 与主流 ORM 对比
 
 > 版本（2026-11-22 核对）：PalORM 6.9.0 · Dapper 2.1.100 + Dapper.AOT 1.1.0 · EF Core 10.0.14 · RepoDb 1.17.0。
