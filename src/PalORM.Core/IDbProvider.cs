@@ -59,6 +59,16 @@ public interface IDbProvider
     /// <para>把归一挂到执行叶子，覆盖全部写入口且不依赖生成物新增元数据；重复归一必须幂等。</para></summary>
     static virtual void NormalizeCommandParameters(DbCommand command) { }
 
+    /// <summary>执行前对 <see cref="DbBatch"/> 中<b>单条子命令</b>的已绑定参数做方言归一（值级）。
+    /// 默认无操作。
+    /// <para><b>为什么需要独立成员</b>：<see cref="DbBatchCommand"/> 不是 <see cref="DbCommand"/>，
+    /// 无法传给 <see cref="NormalizeCommandParameters(DbCommand)"/>；而批量路径（<c>SessionBatch</c>、
+    /// <c>QueryPipeline</c>、批分页）的参数全部挂在子命令上，外层 batch 无参数集合。缺这一支会让
+    /// 批路径成为归一的盲区（与 2026-11-24 发现的 reader/scalar 叶子缺口同族）。</para>
+    /// <para><b>与 <see cref="NormalizeCommandParameters(DbCommand)"/> 的关系</b>：两者共用同一份
+    /// 值级归一逻辑，Provider 实现应让后者委托前者或共用私有方法，避免两套判据漂移。</para></summary>
+    static virtual void NormalizeBatchCommandParameters(DbBatchCommand command) { }
+
     /// <summary>创建<b>数组</b>参数（2026-10-02，UNNEST 形态用）。
     /// <para><b>元素类型由 <paramref name="values"/> 的运行时元素类型推断</b>——生成物构造的是
     /// 类型化数组（<c>long[]</c>/<c>string[]</c>/…），数组元素类型即参数类型；调用方无需另传

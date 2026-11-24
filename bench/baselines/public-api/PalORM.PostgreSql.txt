@@ -24,6 +24,7 @@ M:PalORM.PostgreSql.PostgreSqlProvider|CreateTypedArrayParameter(System.String, 
 M:PalORM.PostgreSql.PostgreSqlProvider|IsConnectionFailure(System.Exception)|System.Boolean|static
 M:PalORM.PostgreSql.PostgreSqlProvider|IsDuplicateSchemaObject(System.Exception)|System.Boolean|static
 M:PalORM.PostgreSql.PostgreSqlProvider|IsUniqueViolation(System.Exception)|System.Boolean|static
+M:PalORM.PostgreSql.PostgreSqlProvider|NormalizeBatchCommandParameters(System.Data.Common.DbBatchCommand)|System.Void|static
 M:PalORM.PostgreSql.PostgreSqlProvider|NormalizeCommandParameters(System.Data.Common.DbCommand)|System.Void|static
 M:PalORM.PostgreSql.PostgreSqlProvider|QuoteIdentifier(System.String)|System.String|static
 M:PalORM.PostgreSql.PostgreSqlProvider|QuoteQualifiedIdentifier(System.String, System.String)|System.String|static

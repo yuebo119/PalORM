@@ -462,7 +462,10 @@ public partial class DataSession<TProvider>
         object firstKey = info.Crud.ConvertDeleteKey?.Invoke(keys[0]) ?? keys[0];
         if (firstKey is not (long or int or short or byte or sbyte or ushort or uint or string))
         {
-            CacheJsonEachSupport<T>(false);
+            // 2026-11-24 补救：键形态不适用是**本次调用的事**，与 json_each 引擎能力无关。
+            // 原此处写 CacheJsonEachSupport<T>(false) 会把进程级能力位永久置 false，
+            // 毒化后续同 (TProvider,T) 的读侧 GetByKeyManyAsync（读侧注释明示键形态不适用
+            // 不应写能力缓存）。这里只回退 IN，不动能力位。
             return false;
         }
 
@@ -1866,7 +1869,7 @@ public partial class DataSession<TProvider>
                     cmd.CommandTimeout = 3;  // SELECT VERSION() 是即时查询，3 秒足够
                     cmd.CommandText = "SELECT VERSION()";
                     object? scalar = await ExecuteScalarWithPoisonAsync(cmd, token).ConfigureAwait(false);
-                    bool supportsValuesRow = scalar is string version && ParseMySqlVersion(version) >= MySQL_8_0_19;
+                    bool supportsValuesRow = SupportsValuesRowForm(scalar as string);
                     return new MySqlUpdateFormCacheHolder.MySqlUpdateFormProbe(
                         supportsValuesRow
                             ? BatchUpdateSqlBuilder.BatchUpdateForm.JoinValuesRow
@@ -1885,33 +1888,14 @@ public partial class DataSession<TProvider>
         }
     }
 
-    /// <summary>MySQL 8.0.19 的比较键——UPDATE JOIN table value constructor 的最低版本。</summary>
-    private const long MySQL_8_0_19 = (8L << 40) | (0L << 24) | 19L;
+    /// <summary>版本串是否支持 VALUES ROW 形态（单一定义点，见 <see cref="MySqlVersionForm"/>）。</summary>
+    private static bool SupportsValuesRowForm(string? version)
+        => MySqlVersionForm.SupportsValuesRow(version);
 
     private const int MySqlUpdateFormProbeTtlMilliseconds = 60_000;
 
     /// <summary>P3-4：版本探测失败后的负结果窗口——与 local_infile 同口径 10s。</summary>
     private const int MySqlUpdateFormNegativeTtlMilliseconds = 10_000;
-
-    /// <summary>解析 MySQL 版本串为可比较键：主版本×2^40 + 次版本×2^24 + 补丁。
-    /// 兼容 <c>8.4.11</c>、<c>8.0.36-0ubuntu0.22.04.1</c>、<c>5.7.44-log</c> 等形态
-    /// （补丁段取首个数字段，其后任意后缀忽略）。解析失败返回 0（调用方按不支持处理）。</summary>
-    private static long ParseMySqlVersion(string version)
-    {
-        // 取首个 "-"/" " 前的数字点分部分
-        int end = 0;
-        while (end < version.Length && (char.IsAsciiDigit(version[end]) || version[end] == '.'))
-            end++;
-        if (end == 0) return 0;
-        ReadOnlySpan<char> core = version.AsSpan(0, end);
-        Span<Range> ranges = stackalloc Range[3];
-        int parts = core.Split(ranges, '.');
-        if (parts == 0) return 0;
-        long major = parts > 0 && long.TryParse(core[ranges[0]], out long maj) ? maj : 0;
-        long minor = parts > 1 && long.TryParse(core[ranges[1]], out long min) ? min : 0;
-        long patch = parts > 2 && long.TryParse(core[ranges[2]], out long pat) ? pat : 0;
-        return (major << 40) | (minor << 24) | patch;
-    }
 
     /// <summary>MySQL-7：按形态取单批行数上限。
     /// <para><b>JoinValuesRow</b>：VALUES ROW 形态服务端是等值 JOIN（无逐行 CASE 分支比较），
@@ -2839,5 +2823,39 @@ internal static class MySqlUpdateFormCacheHolder
 {
     /// <summary>探测结果值（形态枚举；TTL 由缓存底座管理）。</summary>
     internal sealed record MySqlUpdateFormProbe(BatchUpdateSqlBuilder.BatchUpdateForm Form);
+}
+
+/// <summary>MySQL 服务端版本 → 批量 UPDATE 形态的判定（2026-11-24 从 DataSession_Bulk 抽出，
+/// 供锁定测试直接调用）。</summary>
+internal static class MySqlVersionForm
+{
+    private const long V8_0_19 = (8L << 40) | (0L << 24) | 19L;
+
+    /// <summary>版本串是否支持 VALUES ROW 批量更新形态。
+    /// MariaDB 的 <c>SELECT VERSION()</c> 形如 <c>10.5.1-MariaDB</c>：主版本号 10 &gt; 8 会被
+    /// 旧的「只比主版本」判据误判为支持 MySQL 8.0.19+ 的 VALUES ROW，而 MariaDB 的版本编号与
+    /// MySQL 不可比且不支持该派生表列别名形态 —— 误判会让每次批量更新整批语法错误。
+    /// 故识别到 MariaDB 后缀一律回退 CaseWhen。</summary>
+    internal static bool SupportsValuesRow(string? version)
+        => version is not null
+            && !version.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)
+            && Parse(version) >= V8_0_19;
+
+    /// <summary>解析 MySQL 版本串为可比较键（主版本×2^40 + 次版本×2^24 + 补丁）。</summary>
+    private static long Parse(string version)
+    {
+        int end = 0;
+        while (end < version.Length && (char.IsAsciiDigit(version[end]) || version[end] == '.'))
+            end++;
+        if (end == 0) return 0;
+        ReadOnlySpan<char> core = version.AsSpan(0, end);
+        Span<Range> ranges = stackalloc Range[3];
+        int parts = core.Split(ranges, '.');
+        if (parts == 0) return 0;
+        long major = parts > 0 && long.TryParse(core[ranges[0]], out long maj) ? maj : 0;
+        long minor = parts > 1 && long.TryParse(core[ranges[1]], out long min) ? min : 0;
+        long patch = parts > 2 && long.TryParse(core[ranges[2]], out long pat) ? pat : 0;
+        return (major << 40) | (minor << 24) | patch;
+    }
 }
 

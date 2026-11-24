@@ -59,8 +59,15 @@ internal static class CapabilityProbeCache<T>
         return value;
     }
 
-    /// <summary>强制失效单键（ITM-892 族：TTL 窗口内服务端状态变化，失败后重探测）。</summary>
-    public static void Invalidate(string key) => Cache.TryRemove(key, out _);
+    /// <summary>强制失效单键（ITM-892 族：TTL 窗口内服务端状态变化，失败后重探测）。
+    /// 2026-11-24 补救：<see cref="Clear"/> 两表都清，本方法此前只清正结果表——调用方
+    ///（MySQL BulkCopy 失败后的 P2-5 回退）先 Invalidate 再重探测，却被仍生效的 10s 负窗口
+    /// 直接短路为 ProbeFailed，强制失效静默失效。这里同步清负标记，与 Clear 语义对齐。</summary>
+    public static void Invalidate(string key)
+    {
+        Cache.TryRemove(key, out _);
+        NegativeUntil.TryRemove(key, out _);
+    }
 
     /// <summary>清空全部缓存（测试基础设施用：真库用例会在运行中修改服务端全局变量，改回原值后
     /// 缓存仍可能持有旧结论直到 TTL 到期，使后续用例静默走降级分支——2026-10-18 审计实测
