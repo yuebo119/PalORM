@@ -291,22 +291,29 @@ public sealed class ErrorContractTests
 
     [Test]
     [Property("Category", "ExternalDatabase")]
-    public async Task E9_PostgreSql_NonUtcDateTime_ThrowsInvalidCastException()
+    public async Task E9_PostgreSql_NonUtcDateTime_IsNormalizedToUtc()
     {
         await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
         await db.MigrateAsync();
         await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
 
-        // 实测（0a 时间矩阵）：PG 的 DateTime 列映射 timestamptz，只接受 Utc。
-        // Npgsql 11 起绑定期拒绝由裸 ArgumentException 改为包 InvalidCastException
-        // （内层 ArgumentException：Cannot write DateTime with Kind=Unspecified）。
-        await Assert.That(async () => await db.InsertAsync(new CfTimeMatrixEntity
+        // 6.9.0 承诺：Kind=Local / Unspecified 的 DateTime 在 PG 上对所有写入路径统一归一为
+        // UTC 时刻。R1（2026-11-24）补齐 INSERT RETURNING 的静态标量叶子后，该路径不再抛
+        // InvalidCastException（旧用例锁定的是归一缺失期的失败契约，与公开承诺冲突）。
+        var input = new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Unspecified);
+        var entity = new CfTimeMatrixEntity
         {
-            Dt = new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Unspecified),
+            Dt = input,
             Dto = new DateTimeOffset(2026, 7, 18, 10, 30, 0, TimeSpan.Zero),
             DateOnly = new DateOnly(2026, 7, 18),
             TimeOnly = new TimeOnly(10, 30, 0)
-        })).Throws<InvalidCastException>();
+        };
+        await db.InsertAsync(entity);
+
+        CfTimeMatrixEntity read = (await db.GetAsync<CfTimeMatrixEntity>(entity.Id))!;
+        await Assert.That(read.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+        await Assert.That(read.Dt.Ticks).IsEqualTo(input.Ticks)
+            .Because("默认 UTC 会话下 Unspecified 归一为同一墙钟的 UTC 时刻");
 
         await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
     }

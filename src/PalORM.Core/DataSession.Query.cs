@@ -430,7 +430,10 @@ public sealed partial class DataSession<TProvider>
             _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
             _operationState, _options.ValidateQueryColumnOrder,
             syncIo: TProvider.PreferSynchronousIo, syncRowRead: PreferSynchronousRowRead,
-            connectionFailureHandler: MarkConnectionPoisoned);
+            connectionFailureHandler: MarkConnectionPoisoned,
+            // FLT-5 同族（E9-01）：builder 构造与执行可跨操作，其间会话若判死重建会整体换 _conn；
+            // 取现值避免对已释放快照建命令。与 LINQ 栈同源。
+            connectionProvider: () => ((IQuerySessionResilience)this).GetPrimaryConnectionForExecution());
     }
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。

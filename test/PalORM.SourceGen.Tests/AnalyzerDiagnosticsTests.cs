@@ -33,6 +33,24 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task StructProjectionWithTable_ReportsPalorm049()
+    {
+        // E6-02（2026-11-24）：[Projection] 允许 struct（AttributeUsage = Class|Struct），
+        // PALORM049/050 注册此前只取 TypeKind.Class，struct 投影的冲突静默漏报。
+        const string source = """
+            using PalORM;
+            [Projection]
+            [Table("p")]
+            public readonly record struct ProjRow(long Id, string Name);
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM049")).IsTrue()
+            .Because("struct 投影同标 [Table] 应报 PALORM049（与 class 同口径）");
+    }
+
+    [Test]
     public async Task PropertyNamedIdOrWithColumn_DoesNotReportPalorm002()
     {
         const string source = """
