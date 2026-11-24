@@ -33,6 +33,24 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task StructProjectionWithTable_ReportsPalorm049()
+    {
+        // E6-02（2026-11-24）：[Projection] 允许 struct（AttributeUsage = Class|Struct），
+        // PALORM049/050 注册此前只取 TypeKind.Class，struct 投影的冲突静默漏报。
+        const string source = """
+            using PalORM;
+            [Projection]
+            [Table("p")]
+            public readonly record struct ProjRow(long Id, string Name);
+            """;
+
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM049")).IsTrue()
+            .Because("struct 投影同标 [Table] 应报 PALORM049（与 class 同口径）");
+    }
+
+    [Test]
     public async Task PropertyNamedIdOrWithColumn_DoesNotReportPalorm002()
     {
         const string source = """
@@ -1502,6 +1520,34 @@ public sealed class AnalyzerDiagnosticsTests
                     var b = s.From<E>();
                     b.Select(x => x.Id);
                     await b.ToListAsync();
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM033")).IsTrue();
+    }
+
+    [Test]
+    public async Task PALORM033_SameBuilderProjectionThenToPage_Reports()
+    {
+        // DIG-B2（2026-11-24）：ToPageAsync 是 entity 查询的另一个终端——Select 投影后调用同样必抛
+        // NotSupportedException（运行期守卫与 PALORM033 诊断此前都只覆盖 ToList/First/Single）。
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            public static class C
+            {
+                static async System.Threading.Tasks.Task M<TProvider>(DataSession<TProvider> s)
+                    where TProvider : IDbProvider
+                {
+                    var b = s.From<E>();
+                    b.Select(x => x.Id);
+                    await b.ToPageAsync(10, x => x.Id);
                 }
             }
             """;

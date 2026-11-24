@@ -47,23 +47,24 @@ internal static class ColumnOrderValidator
     /// RowFactory 却无 ColumnNames"不可达。</para></summary>
     private static class ExpectedColumns<T>
     {
+        // DIG-A1（2026-11-24）：与 EntityInfoCache.Per<T> 同型——列序快照与代际合并为单个
+        // volatile 不可变引用，消除「旧列序配新代际」的撕裂读。
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
             Justification = "静态槽按 T 分片正是本缓存的目的（每实体一份），非跨泛型实例共享事故。")]
-        private static IReadOnlyList<string>? _columns;
+        private static volatile ColumnsEntry? _current;
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability", "S2743",
-            Justification = "同 _columns：按 T 分片的代际戳。")]
-        private static int _generation = -1;
+        private sealed record ColumnsEntry(IReadOnlyList<string>? Columns, int Generation);
 
         internal static IReadOnlyList<string>? Get()
         {
-            if (_generation == PalORM_Runtime.RegistryGeneration)
-                return _columns;
-            _columns = PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? columns)
-                ? columns
+            ColumnsEntry? entry = _current;
+            if (entry is not null && entry.Generation == PalORM_Runtime.RegistryGeneration)
+                return entry.Columns;
+            var columns = PalORM_Runtime.ColumnNames.TryGetValue(typeof(T), out IReadOnlyList<string>? found)
+                ? found
                 : null;
-            _generation = PalORM_Runtime.RegistryGeneration;
-            return _columns;
+            _current = new ColumnsEntry(columns, PalORM_Runtime.RegistryGeneration);
+            return columns;
         }
     }
 }

@@ -26,5 +26,8 @@ public sealed partial class DataSession<TProvider>
 
     internal int CompiledCapacity<T>() where T : class, new() => GetMaterializedCapacity<T>();
 
+    /// <summary>当前是否处于并行读作用域——编译计划的并发守卫（契约 ⑤，2026-11-24）。</summary>
+    internal bool CompiledParallelReadsActive => _operationState.ParallelReadsEnabled;
+
     internal void CompiledRecordCount<T>(int count) where T : class, new() => RecordMaterializedCount<T>(count);
 }

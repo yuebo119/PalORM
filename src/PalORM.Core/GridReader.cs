@@ -109,7 +109,14 @@ public sealed class GridReader : IAsyncDisposable
 
             ColumnOrderValidator.Validate<T>(_reader, _validateColumnOrder);
             var typedFactory = (Func<DbDataReader, T>)factory;
-            if (await _reader.ReadAsync(ct).ConfigureAwait(false))
+            // DIG-E6（2026-11-24）：与 ReadAsync 的 syncRead 分流对齐——进程内引擎首行读
+            // 同样免除驱动异步外壳开销。
+            bool hasRow;
+            if (_syncRowRead)
+                hasRow = ReadRowSynchronously(_reader, ct);
+            else
+                hasRow = await _reader.ReadAsync(ct).ConfigureAwait(false);
+            if (hasRow)
             {
                 T result = typedFactory(_reader);
                 _hasResultSet = await _reader.NextResultAsync(ct).ConfigureAwait(false);
@@ -263,5 +270,12 @@ public sealed class GridReader : IAsyncDisposable
                 + "waiting for an active ReadAsync to complete. "
                 + "Ensure all ReadAsync calls complete before disposing the GridReader.");
         }
+    }
+
+    // DIG-E6：首行读的同步叶子——与 ResultListReader.ReadSync 同构。
+    private static bool ReadRowSynchronously(System.Data.Common.DbDataReader reader, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return reader.Read();
     }
 }

@@ -184,8 +184,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     // PALORM033：实体查询后 Select(projection).ToListAsync()——QueryBuilderExtensions.cs:36 throw。
     public static readonly DiagnosticDescriptor SelectProjectionWithToList = new(
-        "PALORM033", "Select(projection) followed by ToListAsync/FirstAsync always throws",
-        "Select(projection) followed by ToListAsync/FirstAsync/SingleAsync always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
+        "PALORM033", "Select(projection) followed by a terminal query always throws",
+        "Select(projection) followed by ToListAsync/FirstAsync/SingleAsync/ToPageAsync always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
 
     // === v5.0 扩充：防静默错误（PALORM034-037, 040）——前版误剔的修正 ===
 
@@ -331,7 +331,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // 非实体（类型的绝大多数）。两条件为合取，交换不影响行为。
         context.RegisterSymbolAction(ctx =>
         {
-            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
+            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Struct } type
                 || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table))  // ITM-512
                 || !SourceGenerationValidation.IsSupportedEntity(type))
                 return;
@@ -341,9 +341,12 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         // R1（v6.0）：[Projection] 类型专属检查——PALORM049（×[Table] 互斥）与
         // PALORM050（属性 [OwnedJson] 禁止）。与实体诊断分离注册（投影无 [Table]，
         // 不进 AnalyzeEntityDiagnostics 的管线）。
+        // E6-02（2026-11-24）：[Projection] 的 AttributeUsage 明示允许 Class | Struct，
+        // 且 Core 有 [Projection] struct 的零堆物化路径（StructProjectionTests）——
+        // 旧注册只取 TypeKind.Class，struct 投影的这两条诊断静默漏报。
         context.RegisterSymbolAction(ctx =>
         {
-            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type
+            if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Struct } type
                 || !type.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Projection)))
                 return;
             CheckProjectionDiagnostics(ctx, type);
@@ -366,7 +369,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             HashSet<string>? assemblyTables = null;
             startContext.RegisterSymbolAction(ctx =>
             {
-                if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class } type) return;
+                if (ctx.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Struct } type) return;
                 var tableAttribute = type.GetAttributes().FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Table));
                 if (tableAttribute is null) return;
                 AnalyzeEntityDiagnostics(ctx, type, ref assemblyTables, identifierComparer);
@@ -552,7 +555,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 {
                     if (member.Expression is IdentifierNameSyntax id
                         && id.Identifier.Text == receiverName
-                        && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync")
+                        && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync" or "ToPageAsync")
                     {
                         terminalStmt = exprStmt;
                         break;
@@ -608,7 +611,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                      .OfType<MemberAccessExpressionSyntax>())
         {
             if (member.Expression is IdentifierNameSyntax id
-                && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"
+                && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync" or "ToPageAsync"
                 && SymbolEqualityComparer.Default.Equals(
                     ctx.SemanticModel.GetSymbolInfo(id, ctx.CancellationToken).Symbol, selectReceiver))
             {
@@ -1507,7 +1510,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         {
             providerType = SourceGenerationValidation.UnwrapNullable(mappedProviderType);
         }
-
+        // E9-01（2026-11-24）：enum 列的 provider 类型由 [Column(StoreAs)] 覆写（AsString→string /
+        // AsInt32→int / AsInt64→long，默认 AsString）。TableModel.FromContext 经 TryResolveEnumStorage
+        // 取该覆写，但本诊断此前只看 member.Type（enum 的 SpecialType 非 String/Char），导致
+        // 默认字符串存储的 enum 列标 Length 被误报。这里复用同一解析入口，避免判据漂移。
+        else if (converterAttr is null
+            && TableModel.TryResolveEnumStorage(member, columnAttr, ctx.Compilation,
+                out ITypeSymbol? enumProviderOverride, out _, out _, out _, out _)
+            && enumProviderOverride is not null)
+        {
+            providerType = SourceGenerationValidation.UnwrapNullable(enumProviderOverride);
+        }
         bool invalid =
             (length is not null && length < 0)
             || (precision is not null && precision < 0)

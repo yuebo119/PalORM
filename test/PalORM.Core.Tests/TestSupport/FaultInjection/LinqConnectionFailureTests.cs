@@ -67,6 +67,52 @@ public sealed class LinqConnectionFailureTests
 
         await Assert.That(deleted).IsEqualTo(1);
         await Assert.That(created.Wrapper.CommandsCreated).IsEqualTo(commandsAfterFailure)
-            .Because("写路径判死同样要触发重建；未置位则第二次写仍用包装层旧连接，计数会增长");
+            .Because("写路径判死同样要触发重建；未置位则第二次写仍用包装层旧连接，计数增长");
+    }
+}
+
+/// <summary>FLT-5 同族（2026-11-24 补）：直查流式族的<b>打开阶段</b>
+/// （<c>ExecuteReaderAsync</c>）失败不置判死。读取阶段的 catch 只包 <c>ReadAsync</c>
+/// （yield 不能进带 catch 的 try），打开阶段的异常直接从 generator 穿出，既不
+/// <c>MarkConnectionPoisoned</c> 也不经会话 <c>CreateCommand</c> 的重建挂接点。
+/// <para><b>夹具口径</b>同 <see cref="LinqConnectionFailureTests"/>：故障只在命令序号 1 注入一次；
+/// 若判死置位并重建，第二次操作落到新连接，包装层计数不增长。</para></summary>
+[Property("Category", "FaultInjection")]
+public sealed class StreamOpenConnectionFailureTests
+{
+    private static InvalidOperationException Poisoned()
+        => new("ExecuteNonQuery can only be called when the connection is open.");
+
+    [Test]
+    public async Task QueryAsyncEnumerable_OpenFailure_PoisonsAndRebuilds()
+    {
+        var created = await FaultInjectionFixtures.CreateAsync(
+            keeper => new FaultyConnection(keeper).FailOnceOnCommand(1, Poisoned()));
+        await using DataSession<SqliteProvider> session = created.Session;
+
+        await using (var seed = created.Keeper.CreateCommand())
+        {
+            seed.CommandText = "INSERT INTO fault_row (Name, Qty) VALUES ('seed', 1)";
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        int consumed = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (FaultRow row in session.QueryAsyncEnumerable<FaultRow>(
+                $"SELECT Id, Name, Qty FROM fault_row"))
+            {
+                consumed += row.Qty;
+            }
+        });
+        await Assert.That(consumed).IsEqualTo(0)
+            .Because("打开阶段即失败，不应产生任何行");
+
+        long commandsAfterFailure = created.Wrapper.CommandsCreated;
+        List<FaultRow> rows = await session.GetAllAsync<FaultRow>();
+
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(created.Wrapper.CommandsCreated).IsEqualTo(commandsAfterFailure)
+            .Because("打开阶段失败也应置判死；未置位则下一次操作仍用包装层旧连接，计数增长");
     }
 }

@@ -88,25 +88,34 @@ internal static class RegistryEmitter
         if (!hasForeignKeys) return all;
 
         var indexByTable = new Dictionary<string, int>(StringComparer.Ordinal);
+        // 同表名多实体：同节点，取最小索引为代表（组内相对序由稳定排序保持）。
+        // representativeOf 把每个实体索引归一到其表名代表——Kahn 图的两端必须都在「代表索引」
+        // 这一命名空间内：旧实现 dependsOn 用实体 i 作键、ready 只枚举代表索引，两者混用会让
+        // 同表名第二个实体（非代表且带 FK）被 ready 加入后在 dependents[node] 上找不到键
+        // （实测 KeyNotFoundException: '1'）。
+        var representativeOf = new int[all.Length];
         for (int i = 0; i < all.Length; i++)
         {
-            // 同表名多实体：同节点，取最小索引为代表（组内相对序由稳定排序保持）
-            if (!indexByTable.ContainsKey(all[i].TableName))
-                indexByTable.Add(all[i].TableName, i);
+            if (!indexByTable.TryGetValue(all[i].TableName, out int representative))
+            {
+                representative = i;
+                indexByTable.Add(all[i].TableName, representative);
+            }
+            representativeOf[i] = representative;
         }
 
-        // 依赖边：tableIndex → 它依赖的表索引集合（表名级）
+        // 依赖边：代表索引 → 它依赖的代表索引集合（表名级，两端同源）
         var dependsOn = new Dictionary<int, HashSet<int>>();
         for (int i = 0; i < all.Length; i++)
         {
+            int from = representativeOf[i];
             foreach (ForeignKeyModel fk in all[i].ForeignKeys.AsSpan())
             {
                 if (fk.ReferencedTable == all[i].TableName) continue;
-                int dep;
-                if (!indexByTable.TryGetValue(fk.ReferencedTable, out dep)) continue;
-                if (dep == i) continue;
+                if (!indexByTable.TryGetValue(fk.ReferencedTable, out int dep)) continue;
+                if (dep == from) continue;
                 HashSet<int> edges;
-                if (!dependsOn.TryGetValue(i, out edges)) dependsOn[i] = edges = new HashSet<int>();
+                if (!dependsOn.TryGetValue(from, out edges)) dependsOn[from] = edges = new HashSet<int>();
                 edges.Add(dep);
             }
         }

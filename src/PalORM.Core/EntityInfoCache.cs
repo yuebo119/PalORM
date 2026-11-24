@@ -23,26 +23,25 @@ internal static class EntityInfoCache
         Justification = "可变静态字段是惰性缓存的语义本体；写入只在注册表查找成功后发生一次（单调不可变前提）。")]
     internal static class Per<T> where T : class, new()
     {
-        /// <summary>缓存槽：null = 未查过（下次走注册表并回填）。</summary>
-        public static EntityRuntimeInfo? Info;
+        // E8-02（2026-11-24）：元数据与代际必须原子可见。旧实现用两个独立静态字段（Info/Generation），
+        // Store 先写 Info 后写 Generation、Get 先读 Info 后读 Generation；并发首次查询可读到
+        // 旧 Info 配新 Generation，把过期表名/列集当当前注册表版本用。合并成单个不可变引用，
+        // 引用赋值在 CLR 上原子，volatile 保证跨核可见性。
+        public static volatile Entry? Current;
 
-        /// <summary>写入时的注册代际——注册表恢复/热重载后旧条目自动失效。</summary>
-        public static int Generation = -1;
+        internal sealed record Entry(EntityRuntimeInfo Info, int Generation);
     }
 
     /// <summary>读缓存：代际与当前注册表一致才命中（测试/热重载恢复后旧条目自动失效）。</summary>
     internal static EntityRuntimeInfo? Get<T>() where T : class, new()
-        => Per<T>.Info is { } info && Per<T>.Generation == PalORM_Runtime.RegistryGeneration
-            ? info
+        => Per<T>.Current is { } entry && entry.Generation == PalORM_Runtime.RegistryGeneration
+            ? entry.Info
             : null;
 
     /// <summary>静态写入入口（S2696：实例方法不直写静态字段）——仅在注册表查找成功后调用。
     /// 代际随写入记录，注册表恢复后旧条目不会被读回。</summary>
     internal static void Store<T>(EntityRuntimeInfo info) where T : class, new()
-    {
-        Per<T>.Info = info;
-        Per<T>.Generation = PalORM_Runtime.RegistryGeneration;
-    }
+        => Per<T>.Current = new Per<T>.Entry(info, PalORM_Runtime.RegistryGeneration);
 
     /// <summary>每类型行工厂缓存槽（直查族专用）。与 <see cref="Per{T}"/> 分离：直查族
     ///（QueryAsync/QueryAsyncEnumerable/QueryFirst/QuerySingle）的 T 允许是 [Projection]
@@ -57,24 +56,20 @@ internal static class EntityInfoCache
         Justification = "可变静态字段是惰性缓存的语义本体；写入只在注册表查找成功后发生一次。")]
     internal static class FactoryPer<T>
     {
-        /// <summary>缓存槽：null = 未查过（下次走 RowFactories 并回填）。</summary>
-        public static object? Factory;
+        // E8-02（同 Per<T>）：工厂与代际合并为单个 volatile 引用，消除写读交错窗口。
+        public static volatile FactoryEntry? Current;
 
-        /// <summary>写入时的注册代际——注册表恢复/热重载后旧条目自动失效。</summary>
-        public static int Generation = -1;
+        internal sealed record FactoryEntry(object Factory, int Generation);
     }
 
     /// <summary>读行工厂缓存：代际一致才命中。</summary>
     internal static object? GetFactory<T>()
-        => FactoryPer<T>.Factory is { } factory
-            && FactoryPer<T>.Generation == PalORM_Runtime.RegistryGeneration
-            ? factory
+        => FactoryPer<T>.Current is { } entry
+            && entry.Generation == PalORM_Runtime.RegistryGeneration
+            ? entry.Factory
             : null;
 
     /// <summary>行工厂缓存写入（同 <see cref="Store{T}"/> 口径）。</summary>
     internal static void StoreFactory<T>(object factory)
-    {
-        FactoryPer<T>.Factory = factory;
-        FactoryPer<T>.Generation = PalORM_Runtime.RegistryGeneration;
-    }
+        => FactoryPer<T>.Current = new FactoryPer<T>.FactoryEntry(factory, PalORM_Runtime.RegistryGeneration);
 }

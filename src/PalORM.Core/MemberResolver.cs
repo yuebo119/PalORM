@@ -17,9 +17,12 @@ internal static class MemberResolver
         Justification = "可变静态字段是惰性缓存的语义本体；写入只在注册表查找成功后发生一次。")]
     private static class ColumnMapPer<TEntity>
     {
-        internal static IReadOnlyDictionary<string, string>? Map;
-        /// <summary>写入时的注册代际——恢复/热重载后旧映射自动失效。</summary>
-        internal static int Generation = -1;
+        // DIG-A1（2026-11-24）：与 EntityInfoCache.Per<T> 同型——值与代际必须原子可见。
+        // 旧实现用两个独立静态字段，写先 Map 后代际、读先 Map 后代际，注册代际切换的并发窗口
+        // 内可读到「旧映射配新代际」，过期列名被当当前版本用。合并成单个 volatile 不可变引用。
+        internal static volatile ColumnMapEntry? Current;
+
+        internal sealed record ColumnMapEntry(IReadOnlyDictionary<string, string> Map, int Generation);
     }
 
     /// <summary>从表达式提取属性名（MemberExpression 或 UnaryExpression 包装的 MemberExpression）。
@@ -47,15 +50,17 @@ internal static class MemberResolver
     internal static string GetColumnName<TEntity>(string propertyName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
-        IReadOnlyDictionary<string, string>? mapping = ColumnMapPer<TEntity>.Map;
-        if (ColumnMapPer<TEntity>.Generation != PalORM_Runtime.RegistryGeneration)
-            mapping = null;
+        ColumnMapPer<TEntity>.ColumnMapEntry? entry = ColumnMapPer<TEntity>.Current;
+        IReadOnlyDictionary<string, string>? mapping = entry is not null
+            && entry.Generation == PalORM_Runtime.RegistryGeneration
+                ? entry.Map
+                : null;
         if (mapping is null
             && PalORM_Runtime.PropertyToColumn.TryGetValue(typeof(TEntity), out var loaded))
         {
             mapping = loaded;
-            ColumnMapPer<TEntity>.Map = loaded;
-            ColumnMapPer<TEntity>.Generation = PalORM_Runtime.RegistryGeneration;
+            ColumnMapPer<TEntity>.Current =
+                new ColumnMapPer<TEntity>.ColumnMapEntry(loaded, PalORM_Runtime.RegistryGeneration);
         }
         if (mapping is null || !mapping.TryGetValue(propertyName, out string? columnName))
         {

@@ -112,6 +112,21 @@ internal sealed class CapabilityProbeCacheTests
         await Assert.That(reprobed.N).IsEqualTo(2);
     }
 
+    /// <summary>2026-11-24：Invalidate 必须同时清负结果窗口，否则调用方（MySQL BulkCopy
+    /// 失败后的强制重探测）虽 Invalidate 仍被 10s 负窗口短路为 ProbeFailed。</summary>
+    [Test]
+    public async Task Invalidate_ClearsNegativeWindow()
+    {
+        string key = NewKey();
+        await Assert.That(CapabilityProbeCache<ProbeValue>.IsNegativeFresh(key)).IsFalse();
+
+        CapabilityProbeCache<ProbeValue>.MarkNegative(key, 60_000);
+        await Assert.That(CapabilityProbeCache<ProbeValue>.IsNegativeFresh(key)).IsTrue();
+
+        CapabilityProbeCache<ProbeValue>.Invalidate(key);
+        await Assert.That(CapabilityProbeCache<ProbeValue>.IsNegativeFresh(key)).IsFalse();
+    }
+
     [Test]
     public async Task Cache_IsBounded_WhenManyKeysProbed()
     {

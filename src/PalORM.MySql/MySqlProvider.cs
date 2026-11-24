@@ -144,14 +144,17 @@ public sealed class MySqlProvider : IDbProvider
         // 当前行为 = 不干预（用户设置优先），如需强制策略请在传入前构造连接串。
         if (!HasExplicitKey(builder, "Cancellation Timeout") && builder.CancellationTimeout == 2)
             builder.CancellationTimeout = 5;
-        // AllowLoadLocalInfile: false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。
-        // ITM-612/EVAL-1：builder 层无法区分"未设置（驱动默认 false）"与"显式 false（安全加固，
-        // 规避恶意服务端读取客户端文件的攻击面）"——显式 false 会被此覆盖。
-        // ITM-666：ADR-G（2026-08-15）已裁决维持本现状——三层兜底（文档登记攻击面 /
-        // 服务端 local_infile=OFF 即禁 BulkCopy / 不做启发式检测），revisit 条件见 ADR-G。
-        // PROV-001（2026-09-23）：ContainsKey 现已可区分两者（ADR-G 的前提"builder 层无法区分"
-        // 被实测证伪）——但改写与否是安全策略裁决，仍按 ADR-G 维持现状，待用户裁决后再动。
-        if (!builder.AllowLoadLocalInfile)
+        // AllowLoadLocalInfile: 未设置时 false→true（v5.0 阶段 4.2 MySqlBulkCopy 前提）。
+        // ITM-612/EVAL-1：驱动默认 false 出于安全考虑（恶意/被攻陷服务端可借 LOAD DATA LOCAL
+        // 读取客户端本地文件）。PalORM 只在用户未表态时提升，否则 BulkCopy 永远不可用。
+        // ITM-666：ADR-G（2026-08-15）登记攻击面并保留兜底通道。
+        // PROV-001（2026-09-23）：HasExplicitKey 已可区分"未设置"与"显式 false"（ADR-G 原前提
+        // "builder 层无法区分"被实测证伪）。
+        // ADR-G 修订（2026-11-24）：采纳"连接串显式意图优先"（ADR-G 决策 2 的落地）——
+        // 用户显式写 AllowLoadLocalInfile=false 时不再改写；此时 local_infile 探测仍会返回
+        // Disabled 或 BulkCopy 抛错后回退多值 INSERT（BulkInsertAsync 的 fallback 分支），
+        // 安全加固意图生效，代价是该连接失去 LOAD DATA 加速。
+        if (!HasExplicitKey(builder, "Allow Load Local Infile") && !builder.AllowLoadLocalInfile)
             builder.AllowLoadLocalInfile = true;
         if (!HasExplicitKey(builder, "Server Redirection Mode")
             && builder.ServerRedirectionMode == MySqlServerRedirectionMode.Disabled)

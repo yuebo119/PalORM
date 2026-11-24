@@ -388,10 +388,17 @@ public sealed partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>R1（2026-11-24）：与读/写叶子同口径，执行前按方言归一已绑定参数。
+    /// INSERT … RETURNING 的 key-only 分支（自增主键实体默认走此路）经本叶子取回主键；
+    /// 这里是 8c4b7e3「5 叶子全归一」遗漏的静态标量叶子，真库实测 <c>Kind=Local</c> + 非 UTC 会话
+    /// 直接抛 <c>InvalidCastException</c>。归一幂等，重复调用无副作用。</summary>
     private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)
-        => TProvider.PreferSynchronousIo
+    {
+        TProvider.NormalizeCommandParameters(command);
+        return TProvider.PreferSynchronousIo
             ? new ValueTask<object?>(ExecuteScalarSync(command, ct))
             : new ValueTask<object?>(command.ExecuteScalarAsync(ct));
+    }
 
     private static object? ExecuteScalarSync(DbCommand command, CancellationToken ct)
     {
@@ -423,7 +430,10 @@ public sealed partial class DataSession<TProvider>
             _conn, name, _options.CommandTimeout, TProvider.CreateParameter,
             _operationState, _options.ValidateQueryColumnOrder,
             syncIo: TProvider.PreferSynchronousIo, syncRowRead: PreferSynchronousRowRead,
-            connectionFailureHandler: MarkConnectionPoisoned);
+            connectionFailureHandler: MarkConnectionPoisoned,
+            // FLT-5 同族（E9-01）：builder 构造与执行可跨操作，其间会话若判死重建会整体换 _conn；
+            // 取现值避免对已释放快照建命令。与 LINQ 栈同源。
+            connectionProvider: () => ((IQuerySessionResilience)this).GetPrimaryConnectionForExecution());
     }
 
     /// <summary>流式查询——IAsyncEnumerable 恒定内存。
@@ -488,34 +498,50 @@ public sealed partial class DataSession<TProvider>
                 BindFormattableParameters(cmd, sql);
             }
 
-            await using DbDataReader reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
-            // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
-            // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
-            // try/catch 只包 ReadAsync，yield 保持在 try 之外（C# 禁止 yield 出现在带 catch 的 try 内）。
-            lease.MarkHealthy();
-            var tf = streamRowFactory;
-            bool firstRow = true;
-            while (true)
+            // FLT-5 同族（2026-11-24 补）：打开阶段的异常原先直接从 generator 穿出——
+            // 既不置判死，也不经下一轮重建。yield 不能进带 catch 的 try，故只把
+            // ExecuteReaderAsync 包进局部 try/catch，reader 的消费放到 catch 之外。
+            DbDataReader reader;
+            try
             {
-                bool hasRow;
-                try
+                reader = await ExecuteReaderAsync(cmd, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lease.MarkFailed();
+                MarkConnectionPoisoned(ex);
+                throw;
+            }
+
+            await using (reader.ConfigureAwait(false))
+            {
+                // A1：reader 成功打开即证明连接本轮可用——先标记健康（早终止消费如 First/Single 族
+                // 在首行后 break 属正常路径，池连接照常归还）；读取阶段异常时撤销标记并丢弃。
+                lease.MarkHealthy();
+                var tf = streamRowFactory;
+                bool firstRow = true;
+                while (true)
                 {
-                    hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+                    bool hasRow;
+                    try
+                    {
+                        hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        lease.MarkFailed();
+                        // C2：reader 读取阶段的连接异常同样要标记判死
+                        MarkConnectionPoisoned(ex);
+                        throw;
+                    }
+                    if (!hasRow) break;
+                    if (firstRow)
+                    {
+                        ValidateColumnOrder<T>(reader);
+                        firstRow = false;
+                    }
+                    yield return tf(reader);
                 }
-                catch (Exception ex)
-                {
-                    lease.MarkFailed();
-                    // C2：reader 读取阶段的连接异常同样要标记判死
-                    MarkConnectionPoisoned(ex);
-                    throw;
-                }
-                if (!hasRow) break;
-                if (firstRow)
-                {
-                    ValidateColumnOrder<T>(reader);
-                    firstRow = false;
-                }
-                yield return tf(reader);
             }
         }
         finally

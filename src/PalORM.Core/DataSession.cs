@@ -505,6 +505,9 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
     }
 
     /// <summary>忽略全局过滤器（[SoftDelete]/[TenantAware]）。设置后本次会话所有查询跳过自动过滤。
+    /// <para><b>写路径同样生效</b>（DEC-1/ADR-X 裁决 A）：Update/Delete/HardDelete/Restore 与
+    /// 四个批量写入口在租户会话下不再追加 tenant_id 条件。锁定用例：
+    /// LifecycleAndExistenceApiTests.IgnoreFilters_WritePath_AlsoSkipsTenantFilter。</para>
     /// <para>该标志在当前会话内<b>没有公开复位 API</b>：跨租户管理查询结束后请换一个会话
     /// （池化会话归还后重租即可），不要在同一会话继续做租户过滤查询。</para>
     /// <para>ITM-568: 与 AddInterceptor 同受门禁保护——有查询在飞时调用会明确失败，
@@ -1455,7 +1458,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             InvalidateReusableCommands();
             _conn = created;
             Volatile.Write(ref _connectionPoisoned, 0);
-            old.Dispose();
+            // DIG-E5（2026-11-24）：ownsConnection=false 时 old 是调用方持有的共享连接，
+            // 判死重建只换会话引用，不替调用方释放物理连接——与 DisposeConnectionIfOwnedAsync
+            // 及关闭路径的所有权判据同口径。
+            if (_ownsConnection)
+                old.Dispose();
         }
         catch
         {
@@ -1517,26 +1524,51 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
 
     internal async ValueTask<DbDataReader> ExecuteReaderWithPoisonAsync(DbCommand command, CancellationToken ct)
     {
+        // DEC-4 归一（2026-11-24 补面）：INSERT…RETURNING 走 reader 叶子，其 binder 用驱动工厂
+        // 建参、绕过 CreateParameter 的创建期归一——此前只在 ExecuteNonQuery 叶子补，reader 侧
+        // 漏掉会让 RETURNING 路径的 DateTime 参数保持原 Kind（真库实测：PG 直接拒绝写入）。
+        TProvider.NormalizeCommandParameters(command);
         try { return await command.ExecuteReaderAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
     }
 
     internal async ValueTask<object?> ExecuteScalarWithPoisonAsync(DbCommand command, CancellationToken ct)
     {
+        // 同上：窄 RETURNING（只回主键）走 scalar 叶子。
+        TProvider.NormalizeCommandParameters(command);
         try { return await command.ExecuteScalarAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
     }
 
     internal async ValueTask<int> ExecuteBatchWithPoisonAsync(DbBatch batch, CancellationToken ct)
     {
+        // DbBatch 的参数挂在各 BatchCommand 上（外层 batch 无参数集合），归一必须逐个命令做。
+        NormalizeBatchCommands(batch);
         try { return await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
     }
 
     internal async ValueTask<DbDataReader> ExecuteBatchReaderWithPoisonAsync(DbBatch batch, CancellationToken ct)
     {
+        NormalizeBatchCommands(batch);
         try { return await batch.ExecuteReaderAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { MarkConnectionPoisoned(ex); throw; }
+    }
+
+    /// <summary>DbBatch 的逐命令归一（DEC-4 补面，2026-11-24）：外层 DbBatch 无参数集合，
+    /// 归一必须下沉到每个 <see cref="DbBatchCommand"/>。</summary>
+    private static void NormalizeBatchCommands(DbBatch batch)
+    {
+        // DbBatchCommandCollection 不实现 IReadOnlyList<T>，但提供 Count 与索引器——
+        // 直接按索引遍历，避免假设接口实现（首次按 IReadOnlyList 写被 CS0266 拒绝）。
+        DbBatchCommandCollection commands = batch.BatchCommands;
+        for (int i = 0; i < commands.Count; i++)
+        {
+            // DbBatchCommand 不是 DbCommand——驱动以它自身的参数集合承载，
+            // 归一必须下沉到每个 DbBatchCommand。
+            // 见 IDbProvider.NormalizeBatchCommandParameters 的默认实现说明。
+            TProvider.NormalizeBatchCommandParameters(commands[i]);
+        }
     }
 
     /// <summary>原生 SQL / 存储过程 / DDL / 裸连接改写了连接态——通知 Provider 把该物理连接
@@ -1872,11 +1904,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return command.ExecuteNonQuery();
     }
 
-    /// <summary>读命令执行叶子——同步/异步按 Provider 能力分流（同 <see cref="ExecuteRowsCoreAsync"/>）。</summary>
+    /// <summary>读命令执行叶子——同步/异步按 Provider 能力分流（同 <see cref="ExecuteRowsCoreAsync"/>）。
+    /// <para>R1（2026-11-24）：与写叶子同口径，执行前按方言归一已绑定参数。INSERT … RETURNING 走本叶子
+    ///（非 key-only 分支），其生成 binder 用驱动工厂建参、绕过 <c>CreateParameter</c> 的创建期归一——
+    /// 缺这一支会让 PG 上 <c>Kind != Utc</c> 的 DateTime 参数被驱动拒绝或按会话时区静默写错。</para></summary>
     internal static ValueTask<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken ct)
-        => TProvider.PreferSynchronousIo
+    {
+        TProvider.NormalizeCommandParameters(command);
+        return TProvider.PreferSynchronousIo
             ? new ValueTask<DbDataReader>(ExecuteReaderSync(command, ct))
             : new ValueTask<DbDataReader>(command.ExecuteReaderAsync(ct));
+    }
 
     private static DbDataReader ExecuteReaderSync(DbCommand command, CancellationToken ct)
     {

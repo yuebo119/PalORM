@@ -59,4 +59,27 @@ internal sealed class CircuitBreakerSlotTests
         // Enter 返回探针而非抛异常——断言红）
         await Assert.That(cb.Enter).Throws<CircuitBreakerOpenException>();
     }
+
+    [Test]
+    public async Task PreOpenEnter_Success_DoesNotCloseFreshlyOpenedCircuit()
+    {
+        // DIG-C1（2026-11-24）：RES-001 写读序配对——Enter 在开闸前返回（gen=N、flag=false），
+        // 随后另一线程触发开闸（gen=N+1、flag=true）。该在飞成功回报携带旧 gen=N，
+        // 不得把刚开的闸关掉。P3-5 曾反转 Open 写序（先 gen 后 flag），使 Enter 有机会
+        // 读到新 gen + 旧 flag、携新 gen 回报而通过核对，冷却期静默失效。
+        var cb = new CircuitBreaker(threshold: 2, resetAfter: TimeSpan.FromSeconds(10));
+
+        // 第一次失败：失败计数 1，未开闸。Enter 拿到当前 gen（闸仍关）
+        cb.RecordFinalFailure(isHalfOpenProbe: false, countsTowardCircuit: true, generation: 0, probeToken: 0);
+        var (_, genBeforeOpen, _) = cb.Enter();
+
+        // 第二次失败：开闸（gen 推进）
+        cb.RecordFinalFailure(isHalfOpenProbe: false, countsTowardCircuit: true, generation: genBeforeOpen, probeToken: 0);
+
+        // 开闸前的在飞成功回报：gen 陈旧，不得关闭新闸
+        cb.RecordSuccess(isHalfOpenProbe: false, genBeforeOpen, probeToken: 0);
+
+        // 冷却期内 Enter 必须被拒（闸仍开）
+        await Assert.That(cb.Enter).Throws<CircuitBreakerOpenException>();
+    }
 }

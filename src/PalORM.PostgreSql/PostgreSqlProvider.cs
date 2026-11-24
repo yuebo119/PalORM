@@ -263,7 +263,21 @@ public sealed class PostgreSqlProvider : IDbProvider
     public static void NormalizeCommandParameters(DbCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        DbParameterCollection parameters = command.Parameters;
+        NormalizeParameterCollection(command.Parameters);
+    }
+
+    /// <summary><see cref="IDbProvider.NormalizeBatchCommandParameters"/> 的 PG 实现：
+    /// 批子命令的参数集合与 <see cref="DbCommand"/> 同为 <see cref="DbParameterCollection"/>，
+    /// 直接复用同一份归一逻辑（单一定义点，避免两套判据漂移）。</summary>
+    public static void NormalizeBatchCommandParameters(DbBatchCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        NormalizeParameterCollection(command.Parameters);
+    }
+
+    /// <summary>归一的核心实现——两种宿主（DbCommand / DbBatchCommand）共用。</summary>
+    private static void NormalizeParameterCollection(DbParameterCollection parameters)
+    {
         int count = parameters.Count;
         if (count == 0)
             return;
@@ -277,6 +291,13 @@ public sealed class PostgreSqlProvider : IDbProvider
                     break;
                 case DateTime[] array:
                     parameter.Value = NormalizeDateTimeArray(array);
+                    break;
+                // 2026-11-24 补救：可空元素数组（DateTime?[]）是**独立运行时类型**——
+                // C# 的 `is DateTime[]` 对它返回 false（实测），故必须单列一支。生成物对
+                // 可空 DateTime 列发射的正是 DateTime?[]（CommandFactoryEmitter.ArrayElementTypeFor
+                // 对 IsNullable 的值类型加 `?`），遗漏该支会让整类可空时间列绕过归一。
+                case DateTime?[] nullableArray:
+                    parameter.Value = NormalizeNullableDateTimeArray(nullableArray);
                     break;
                 default:
                     break;
@@ -302,6 +323,29 @@ public sealed class PostgreSqlProvider : IDbProvider
         var normalized = new DateTime[values.Length];
         for (int i = 0; i < values.Length; i++)
             normalized[i] = (DateTime)NormalizeDateTime(values[i])!;
+        return normalized;
+    }
+
+    /// <summary>逐元归一可空 DateTime 数组；全 Utc 或 null 时返回原实例（不复制）。</summary>
+    private static DateTime?[] NormalizeNullableDateTimeArray(DateTime?[] values)
+    {
+        bool needsNormalization = false;
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (values[i] is { Kind: not DateTimeKind.Utc })
+            {
+                needsNormalization = true;
+                break;
+            }
+        }
+        if (!needsNormalization)
+            return values;
+
+        var normalized = new DateTime?[values.Length];
+        for (int i = 0; i < values.Length; i++)
+        {
+            normalized[i] = values[i] is { } value ? (DateTime?)NormalizeDateTime(value) : null;
+        }
         return normalized;
     }
 
@@ -431,7 +475,12 @@ public sealed class PostgreSqlProvider : IDbProvider
         if (underlying == typeof(decimal)) return NpgsqlDbType.Numeric;
         if (underlying == typeof(double)) return NpgsqlDbType.Double;
         if (underlying == typeof(float)) return NpgsqlDbType.Real;
-        if (underlying == typeof(DateTime)) return NpgsqlDbType.Timestamp;
+        // DEC-4 同源（2026-11-24 补救）：DateTime 在 PG 上表示 UTC 时刻、列型 timestamptz
+        //（MigrationEmitter 统一发射）。数组元素必须与单值 CreateParameter 的
+        // TimestampTz 一致——原映射 Timestamp 会让 UNNEST 批量写在非 UTC 会话下
+        // 把 UTC 墙钟按会话时区解释（真库实测偏移 8 小时），且 Kind=Utc 时被驱动直接拒绝
+        //（"Cannot write DateTime with Kind=UTC to PostgreSQL type 'timestamp without time zone'"）。
+        if (underlying == typeof(DateTime)) return NpgsqlDbType.TimestampTz;
         if (underlying == typeof(DateTimeOffset)) return NpgsqlDbType.TimestampTz;
         if (underlying == typeof(DateOnly)) return NpgsqlDbType.Date;
         if (underlying == typeof(TimeOnly)) return NpgsqlDbType.Time;
@@ -870,6 +919,11 @@ public sealed class PostgreSqlProvider : IDbProvider
                 ? pool[parameterIndex]
                 : rowCommand.Parameters[parameterIndex]);
             object? value = parameter.Value is DBNull ? null : parameter.Value;
+            // DEC-4 补面（2026-11-24）：COPY 直接写 importer、不经命令执行叶子，故执行叶子的
+            // 归一对它无效。Kind != Utc 的 DateTime 写 timestamptz 列会被 Npgsql 拒绝
+            //（真库实测），此处兜底归一（value 本就是 object，无额外装箱）。
+            if (value is DateTime copyDate && copyDate.Kind != DateTimeKind.Utc)
+                value = NormalizeDateTime(copyDate);
             importer.Write(value, columnTypes[parameterIndex]);
         }
     }
@@ -974,7 +1028,9 @@ public sealed class PostgreSqlProvider : IDbProvider
 
         /// <inheritdoc />
         public void WriteDateTime(int ordinal, DateTime value)
-            => _importer.Write(value, _columnTypes[ordinal]);
+            // DEC-4 补面（2026-11-24）：O1 定型直写绕过参数对象，必须在此归一（同 WriteRow 兜底）。
+            => _importer.Write(value.Kind == DateTimeKind.Utc ? value : NormalizeDateTime(value),
+                _columnTypes[ordinal]);
 
         /// <inheritdoc />
         public void WriteDateTimeOffset(int ordinal, DateTimeOffset value)

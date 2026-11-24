@@ -58,6 +58,87 @@ public sealed class PooledDateTimeNormalizationTests
         await Assert.That(secondRead.Dt.Ticks).IsEqualTo(expectedTicks);
     }
 
+    /// <summary>2026-11-24 补救锁定：UNNEST 数组路径的 DateTime 元素类型必须是 TimestampTz，
+    /// 且可空 DateTime?[] 必须归一。修复前真库实测两种失败形态：Kind=Utc 被驱动拒绝
+    ///（"Cannot write DateTime with Kind=UTC to timestamp without time zone"），
+    /// Kind=Unspecified 静默偏移会话时区（8 小时）。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PostgreSql_BulkUpdate_UnnestArray_NormalizesDateTimeElements()
+    {
+        // 显式设置非 UTC 会话时区：测试库连接默认 Etc/UTC，Unspecified 按 UTC 解释恰好不偏移，
+        // 缺陷会被掩盖。Asia/Shanghai 下修复前会偏移 8 小时或被驱动拒绝。
+        await using DataSession<PostgreSqlProvider> db = await CreateShanghaiSessionAsync();
+
+        DateTime localInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Local);
+        CfTimeMatrixEntity first = await InsertSeedAsync(db, new DateTime(2026, 7, 18, 2, 30, 0, DateTimeKind.Utc));
+        CfTimeMatrixEntity second = await InsertSeedAsync(db, new DateTime(2026, 7, 18, 2, 30, 0, DateTimeKind.Utc));
+
+        first.Dt = localInput;
+        second.Dt = localInput;
+        long affected = await db.BulkUpdateAsync([first, second]);
+
+        await Assert.That(affected).IsEqualTo(2L);
+        long expectedTicks = localInput.ToUniversalTime().Ticks;
+        CfTimeMatrixEntity firstRead = (await db.GetAsync<CfTimeMatrixEntity>(first.Id))!;
+        CfTimeMatrixEntity secondRead = (await db.GetAsync<CfTimeMatrixEntity>(second.Id))!;
+        await Assert.That(firstRead.Dt.Ticks).IsEqualTo(expectedTicks)
+            .Because("UNNEST 数组元素必须是 TimestampTz 且经归一；修复前这里偏移或抛异常");
+        await Assert.That(secondRead.Dt.Ticks).IsEqualTo(expectedTicks);
+    }
+
+    /// <summary>R1（2026-11-24 证实档）：单条 INSERT … RETURNING 的归一化锁定。
+    /// 自增主键实体走 key-only RETURNING → ExecuteScalarCoreAsync，宽主键/非 key-only 走
+    /// ExecuteReaderAsync——两者都是静态核心叶子，8c4b7e3 归一只挂了 poison 包装叶子，遗漏了这两支。
+    /// 修复前真库实测：PG 18 / Npgsql 11 / Asia-Shanghai 下 Kind=Local 直接抛
+    /// InvalidCastException（"Could not bind parameter … to timestamp with time zone"）。
+    /// 本用例覆盖 key-only 标量分支；GetAsync 走 reader 叶子，顺带锁定 reader 分支归一。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PostgreSql_InsertReturning_NormalizesLocalDateTimeToUtc()
+    {
+        await using DataSession<PostgreSqlProvider> db = await CreateShanghaiSessionAsync();
+        await db.MigrateAsync();
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS cf_time_matrix");
+        await db.MigrateAsync();
+        try
+        {
+            DateTime localInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Local);
+            long expectedTicks = localInput.ToUniversalTime().Ticks;
+            var row = new CfTimeMatrixEntity
+            {
+                Dt = localInput,
+                Dto = new DateTimeOffset(DateTime.SpecifyKind(localInput, DateTimeKind.Utc)),
+                DateOnly = new DateOnly(2026, 7, 18),
+                TimeOnly = new TimeOnly(10, 30, 0)
+            };
+
+            await db.InsertAsync(row);  // key-only RETURNING → ExecuteScalarCoreAsync（R1 标量叶子）
+            CfTimeMatrixEntity read = (await db.GetAsync<CfTimeMatrixEntity>(row.Id))!; // reader 叶子
+            await Assert.That(read.Dt.Ticks).IsEqualTo(expectedTicks)
+                .Because("INSERT RETURNING 的参数由生成 binder 用驱动工厂建参，静态核心叶子须补归一；"
+                    + "修复前标量叶子抛 InvalidCastException、reader 叶子按会话时区偏移");
+            await Assert.That(read.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+        }
+        finally
+        {
+            // 本类多个用例共享 cf_time_matrix；只清理本用例插入的行，不 DROP 表，
+            // 避免与并发用例的建表/读表窗口互相干扰（T6 要求 finally 清理）。
+            await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
+        }
+    }
+
+    /// <summary>非 UTC 会话时区的测试会话：显式 Sql 设置，确保修复前的时区偏移缺陷可见。</summary>
+    private static async Task<DataSession<PostgreSqlProvider>> CreateShanghaiSessionAsync()
+    {
+        var options = new DbOptions
+        {
+            ConnectionString = TestEnvironment.ResolvePostgreSqlConnectionString(),
+            SessionSetupSql = "SET TIME ZONE 'Asia/Shanghai'"
+        };
+        return await DataSession<PostgreSqlProvider>.CreateAsync(options);
+    }
+
     private static async Task<DataSession<PostgreSqlProvider>> ResetAsync()
     {
         DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();

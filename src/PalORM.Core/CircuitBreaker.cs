@@ -260,11 +260,15 @@ internal sealed class CircuitBreaker
     /// 截止时刻用单调 tick（PalORMClock.Now），不受 NTP 跳变影响。</summary>
     private void Open(long openUntilTick)
     {
-        // P3-5：先推进代际再开闸——旧顺序在 ARM64 弱内存下可能让读者读到新代际+旧 flag，
-        // 携旧代际的成功记录在开闸后被误判为当前探测而提前关闸。
-        Volatile.Write(ref _generation, _generation + 1);
+        // DIG-C1（2026-11-24）：恢复 RES-001 声明的写序——先开闸（flag），后推进代际。
+        // P3-5 曾反转为「先 gen 后 flag」，理由是避免读者拿到新 gen + 旧 flag；但 Enter 的
+        // 读序是先 gen 后 flag，配对的是「写 flag 先于写 gen」：若 Enter 读到 flag=false，
+        // 它先读到的 gen 必然早于本次 Open 的自增（自增在 flag 写之后），陈旧记录由
+        // RecordSuccess 的 gen 核对拦下。反转后 Enter 可读到新 gen + 仍为 false 的 flag，
+        // 非探针成功以新 gen 通过核对、把刚开的闸关掉，冷却期静默失效。
         _isOpen = true;
         _isOpenFlag = true;
+        Volatile.Write(ref _generation, _generation + 1);
         _openUntilTick = openUntilTick;
         _openMessage = FormatOpenMessage(_resetAfter);
     }

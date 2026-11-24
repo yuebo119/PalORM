@@ -143,6 +143,27 @@ public sealed class ColumnSchemaArgsTests
     }
 
     [Test]
+    public async Task PALORM051_EnumWithLengthAsStringProvider_DoesNotReport()
+    {
+        // E9-01（2026-11-24）：enum 默认按 AsString 存储（provider=string），Length 合法。
+        // 旧诊断只看 member.Type（enum 非 string/char）误报；这里锁定与 TableModel 覆写口径一致。
+        const string source = """
+            using PalORM;
+            public enum Status { Active, Inactive }
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("status", Length = 32)]
+                public Status Status { get; set; }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzerDiagnosticsTests.AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM051")).IsFalse()
+            .Because("enum 默认 AsString 存储，provider=string，Length 适用");
+    }
+
+    [Test]
     public async Task PALORM051_NullableCharWithLength_DoesNotReport()
     {
         const string source = """

@@ -397,7 +397,10 @@ public sealed partial class DataSession<TProvider>
                         .ConfigureAwait(false);
                     return true;
                 },
-                ct).ConfigureAwait(false);
+                ct,
+                // 迁移 DDL 不翻译唯一冲突：并发建表的确认冲突由 IsDuplicateSchemaObject 兜底
+                //（IF NOT EXISTS 家族），翻译成 PalORM 异常会让该 catch-when 失配、并发迁移报红。
+                translateUniqueViolation: false).ConfigureAwait(false);
             return;
         }
 

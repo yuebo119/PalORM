@@ -926,8 +926,12 @@ public sealed partial class DataSession<TProvider>
     /// <summary>MySQL 路径——INSERT + SELECT LAST_INSERT_ID() 合并为单次 ExecuteScalarAsync。
     /// 显式方言守卫：未来第三方 Provider 走到此处应明确失败，而非收到 LAST_INSERT_ID 专有 SQL。
     /// <para>PL-2：语句文本、超时与参数绑定已由 <see cref="InsertCoreAsync"/> 完成
-    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填。</para></summary>
-    private static async ValueTask<T> InsertWithLastInsertIdAsync<T>(
+    /// （参数池路径在那里只写 Value）——本方法只负责执行与回填。</para>
+    /// <para><b>TX-004 的 MySQL 通道</b>（2026-11-24 补）：回填必须走
+    /// <see cref="BackfillGeneratedId{TEntity}"/> 的延迟队列，与窄/整行 RETURNING 两路同口径；
+    /// 自开事务回滚后直接 <c>setId</c> 会让实体持有已不存在行的 ID。拿不到 ID 时与窄 RETURNING
+    /// 同样明确失败，不静默返回未回填实体。</para></summary>
+    private async ValueTask<T> InsertWithLastInsertIdAsync<T>(
         EntityRuntimeInfo info,
         DbCommand cmd, T entity, CancellationToken ct)
         where T : class, new()
@@ -940,8 +944,10 @@ public sealed partial class DataSession<TProvider>
         // PL-2：语句文本、超时与参数绑定已由 TryAcquireInsertCommand 完成——本方法只执行
         long? generatedId = NormalizeGeneratedId(
             await ExecuteScalarCoreAsync(cmd, ct).ConfigureAwait(false));
-        if (generatedId is long id && info.SetId is { } setId)
-            setId(entity, id);
+        if (generatedId is not { } id)
+            throw new InvalidOperationException($"INSERT failed for '{typeof(T).Name}'.");
+        if (info.SetId is { } setId)
+            BackfillGeneratedId(setId, entity, id);
         return entity;
     }
 
@@ -1096,7 +1102,8 @@ public sealed partial class DataSession<TProvider>
     /// <summary>物理删除单行，绕过 [SoftDelete] 的软删改写。
     /// <para><b>与 DeleteAsync 的分工</b>：DeleteAsync 对软删实体执行逻辑删除；本方法执行真实
     /// DELETE，用于数据清理与合规删除。不可恢复，故不设默认参数，调用即明示。</para>
-    /// <para>租户实体会追加租户条件，只能删除会话当前租户的行。性能与非软删实体的
+    /// <para>租户实体会追加租户条件；<see cref="IgnoreFilters"/> 会话下该条件不追加
+    /// （DEC-1/ADR-X 裁决 A：写路径同样放开，这是唯一跨租户运维出口）。性能与非软删实体的
     /// DeleteAsync 逐指令等价（同一条物理删除路径）。</para></summary>
     public async ValueTask<int> HardDeleteAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()
@@ -1112,7 +1119,8 @@ public sealed partial class DataSession<TProvider>
     /// <summary>恢复软删行（UPDATE deleted_at = NULL）。
     /// <para>仅对 [SoftDelete] 实体有效，非软删实体没有 deleted_at 列。重复恢复返回 0 行
     /// （WHERE 要求 deleted_at IS NOT NULL），与软删 DeleteAsync 的幂等语义对称。</para>
-    /// <para>租户实体追加租户条件，只能恢复会话当前租户的行。稳态零托管分配：SQL 走 2 槽静态
+    /// <para>租户实体追加租户条件；<see cref="IgnoreFilters"/> 会话下不追加（同 HardDeleteAsync，
+    /// 裁决 A 的写侧放开）。稳态零托管分配：SQL 走 2 槽静态
     /// 缓存；低频操作不建命令复用槽（Lessons B98：摊销不掉槽检查成本）。</para></summary>
     public async ValueTask<int> RestoreAsync<T>(object key, CancellationToken ct = default)
         where T : class, new()

@@ -330,6 +330,31 @@ public sealed class LifecycleAndExistenceApiTests
             .Because("b 的行被跨租户软删（正常租户条件下这次删除应为 0 行）");
     }
 
+    /// <summary>DEC-1 锁定（HardDelete 形态）：IgnoreFilters 下 HardDeleteAsync 跨租户命中。
+    /// 与 IgnoreFilters_WritePath_AlsoSkipsTenantFilter（QueryBuilder.ExecuteDelete 形态）互补，
+    /// 锁的是 CRUD 直入口上的同一写侧语义——两处文档均已按裁决 A 更正。</summary>
+    [Test]
+    public async Task IgnoreFilters_HardDelete_CrossesTenantScope()
+    {
+        // 内存库 SQLite（Data Source=:memory:）不跨会话共享，故本用例必须在同一会话内完成：
+        // 先验证租户条件生效（IgnoreFilters 之前），再验证裁决 A 的写侧放开。
+        await using DataSession<SqliteProvider> db = await CreateSessionAsync();
+        await SeedAsync(db);
+        await db.InsertAsync(new LifecycleTenant { Name = "a-row", TenantId = "a" });
+        LifecycleTenant b = await db.InsertAsync(new LifecycleTenant { Name = "b-row", TenantId = "b" });
+
+        db.WithTenant("a");
+        await Assert.That(await db.HardDeleteAsync<LifecycleTenant>(b.Id)).IsEqualTo(0)
+            .Because("租户条件下跨租户主键命中 0 行");
+
+        await Assert.That(await db.IgnoreFilters().HardDeleteAsync<LifecycleTenant>(b.Id)).IsEqualTo(1)
+            .Because("IgnoreFilters 写侧放开后物理删除命中");
+
+        List<LifecycleTenant> remaining = await db.IgnoreFilters().GetAllAsync<LifecycleTenant>();
+        await Assert.That(remaining.Count).IsEqualTo(1)
+            .Because("b 行被物理删除，只剩 a 行");
+    }
+
     [Test]
     public async Task ExecuteDeleteAsync_RejectsOrderGroupSkip()
     {

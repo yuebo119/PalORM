@@ -30,6 +30,11 @@ public sealed class StoredProcBuilder
     /// <summary>FLT4-4（2026-11-09）：连接判死回调——由 DataSession 注入
     /// <see cref="DataSession{TProvider}.MarkConnectionPoisoned"/>，执行失败时通知会话置位。</summary>
     private readonly Action<Exception>? _connectionFailureHandler;
+    /// <summary>E9-01（2026-11-24）：会话现值连接提供器。builder 在 StoredProc() 时构造、执行可能跨多个
+    /// 操作；其间会话若因判死重建整体替换了连接（FLT-5），构造期快照 _conn 已释放。执行前取现值，
+    /// 与 LINQ 栈经 IQuerySessionResilience.GetPrimaryConnectionForExecution 同源。未提供时回退快照
+    /// （保持旧形态兼容）。</summary>
+    private readonly Func<DbConnection>? _connectionProvider;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S107:Constructor should not have more than 7 parameters",
@@ -40,7 +45,8 @@ public sealed class StoredProcBuilder
         bool validateColumnOrder = false,
         bool syncIo = false,
         bool syncRowRead = false,
-        Action<Exception>? connectionFailureHandler = null)
+        Action<Exception>? connectionFailureHandler = null,
+        Func<DbConnection>? connectionProvider = null)
     {
         _validateColumnOrder = validateColumnOrder;
         _conn = conn;
@@ -51,7 +57,11 @@ public sealed class StoredProcBuilder
         _syncIo = syncIo;
         _syncRowRead = syncRowRead;
         _connectionFailureHandler = connectionFailureHandler;
+        _connectionProvider = connectionProvider;
     }
+
+    /// <summary>执行时取会话现值连接——判死重建后不再指向已释放的构造期快照。</summary>
+    private DbConnection CurrentConnection => _connectionProvider?.Invoke() ?? _conn;
 
     /// <summary>过程名白名单：字母/下划线开头，仅含字母数字、下划线和点分限定符。
     /// 过程名直接进入 CommandText（CommandType.StoredProcedure），纵深防御拒绝特殊字符。
@@ -167,7 +177,7 @@ public sealed class StoredProcBuilder
             throw new InvalidOperationException($"Type '{typeof(T).Name}' not registered.");
         MarkExecuted();
 
-        await using DbCommand cmd = _conn.CreateCommand();
+        await using DbCommand cmd = CurrentConnection.CreateCommand();
         cmd.CommandText = _name;
         cmd.CommandType = CommandType.StoredProcedure;
         cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(_timeout);
@@ -177,7 +187,8 @@ public sealed class StoredProcBuilder
         DbDataReader reader;
         if (_syncIo)
         {
-            reader = OpenReaderSynchronously(cmd, ct);
+            try { reader = OpenReaderSynchronously(cmd, ct); }
+            catch (Exception ex) { _connectionFailureHandler?.Invoke(ex); throw; }
         }
         else
         {
@@ -198,7 +209,7 @@ public sealed class StoredProcBuilder
         using SessionOperationState.SessionOperationLease operation =
             _operationState.Enter();
         MarkExecuted();
-        await using DbCommand cmd = _conn.CreateCommand();
+        await using DbCommand cmd = CurrentConnection.CreateCommand();
         cmd.CommandText = _name;
         cmd.CommandType = CommandType.StoredProcedure;
         cmd.CommandTimeout = DbOptions.ToCommandTimeoutSeconds(_timeout);

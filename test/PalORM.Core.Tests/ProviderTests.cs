@@ -8,6 +8,38 @@ public sealed class ProviderTests
 {
     private sealed class ProviderBatchEntity;
 
+    /// <summary>2026-11-24：MariaDB 版本串不得误判为支持 MySQL 8.0.19+ 的 VALUES ROW 形态。
+    /// 修复前 "10.5.1-MariaDB" 的主版本号 10 &gt; 8 被判为支持，导致 MariaDB 上每次批量更新
+    /// 因不支持派生表列别名 AS v(c0,c1,pk) 而整批语法错误。</summary>
+    [Test]
+    public async Task MySqlVersionForm_MariaDB_FallsBackToCaseWhen()
+    {
+        await Assert.That(MySqlVersionForm.SupportsValuesRow("10.5.1-MariaDB")).IsFalse();
+        await Assert.That(MySqlVersionForm.SupportsValuesRow("11.4.2-MariaDB")).IsFalse();
+        // 对照组：真正的 MySQL 8.0.19+ 仍应选 VALUES ROW
+        await Assert.That(MySqlVersionForm.SupportsValuesRow("8.0.36-0ubuntu0.22.04.1")).IsTrue();
+        await Assert.That(MySqlVersionForm.SupportsValuesRow("5.7.44-log")).IsFalse();
+    }
+
+    /// <summary>2026-11-24：UNNEST 数组元素类型必须与单值 CreateParameter 一致（TimestampTz）。
+    /// 修复前 ArrayElementDbType 把 DateTime 映射为 Timestamp（无时区），在会话时区非 UTC 时
+    /// 按 UTC 墙钟被解释成偏移时刻（真库实测偏移 8 小时），且 Kind=Utc 会被驱动拒绝。
+    /// 这是函数级证据（直接锁定 Provider 映射），调用点级由真库用例补。</summary>
+    [Test]
+    public async Task PostgreSqlProvider_DateTimeArrayElementType_IsTimestampTz()
+    {
+        var array = new DateTime[] { new(2026, 7, 18, 10, 0, 0, DateTimeKind.Utc) };
+        var parameter = PalORM.PostgreSql.PostgreSqlProvider.CreateTypedArrayParameter(
+            "@p0", array, typeof(DateTime));
+        await Assert.That(parameter).IsNotNull();
+        var npgsql = (Npgsql.NpgsqlParameter)parameter!;
+        // Npgsql 官方要求 Array 按位或组合（枚举未标 [Flags] 是驱动侧标注疏漏）。
+#pragma warning disable S3265
+        NpgsqlTypes.NpgsqlDbType expected = NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.TimestampTz;
+#pragma warning restore S3265
+        await Assert.That(npgsql.NpgsqlDbType).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task SqliteProvider_KeyMembers_BehaveAsExpected()
     {
@@ -152,6 +184,29 @@ public sealed class ProviderTests
         await Assert.That(mysql.ConnectionString).Contains("Maximum Pool Size=23");
         await Assert.That(mysql.ConnectionString).Contains("Connection Idle Timeout=17");
         await Assert.That(mysql.ConnectionString).Contains("Connection Lifetime=300");
+    }
+
+    /// <summary>ADR-G 修订（2026-11-24）锁定：显式 AllowLoadLocalInfile=false 不再被改写。
+    /// 未表态时仍提升为 true（BulkCopy 前提）；显式 true 原样保留。
+    /// 键名形态由实测钉住：builder.Keys 返回规范化 "Allow Load Local Infile"（带空格）。</summary>
+    [Test]
+    public async Task MySqlProvider_PreservesExplicitAllowLoadLocalInfile()
+    {
+        var options = new DbOptions { ConnectionString = "x" };
+
+        await using var explicitFalse = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test;AllowLoadLocalInfile=false", options);
+        await Assert.That(explicitFalse.ConnectionString).Contains("Allow Load Local Infile=False")
+            .Because("显式关闭是安全加固意图（恶意服务端读客户端文件），不得被改写");
+
+        await using var unspecified = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test", options);
+        await Assert.That(unspecified.ConnectionString).Contains("Allow Load Local Infile=True")
+            .Because("未表态时提升以保证 BulkCopy 可用");
+
+        await using var explicitTrue = PalORM.MySql.MySqlProvider.CreateConnection(
+            "Server=localhost;Database=test;AllowLoadLocalInfile=true", options);
+        await Assert.That(explicitTrue.ConnectionString).Contains("Allow Load Local Infile=True");
     }
 
     [Test]
@@ -532,6 +587,25 @@ public sealed class ProviderTests
         options.Validate();
         await Assert.That(DbOptions.ToCommandTimeoutSeconds(TimeSpan.Zero)).IsEqualTo(0);
         await Assert.That(options.CommandTimeoutSeconds).IsEqualTo(0);
+    }
+
+    /// <summary>2026-11-24：PG 参数归一的 DateTime?[] 分支——Local 元素归一为 UTC、
+    /// 全 UTC 数组原样保留（覆盖 needsNormalization 两侧分支）。</summary>
+    [Test]
+    public async Task PostgreSqlProvider_NormalizeNullableDateTimeArray_BothBranches()
+    {
+        await using var cmd = new Npgsql.NpgsqlCommand();
+        DateTime?[] local = [new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Local)];
+        cmd.Parameters.Add(new Npgsql.NpgsqlParameter("@p0", local));
+        PalORM.PostgreSql.PostgreSqlProvider.NormalizeCommandParameters(cmd);
+        DateTime?[] normalized = (DateTime?[])cmd.Parameters[0].Value!;
+        await Assert.That(normalized[0]!.Value.Kind).IsEqualTo(DateTimeKind.Utc);
+
+        await using var cmdUtc = new Npgsql.NpgsqlCommand();
+        DateTime?[] utc = [new DateTime(2026, 7, 18, 2, 30, 0, DateTimeKind.Utc)];
+        cmdUtc.Parameters.Add(new Npgsql.NpgsqlParameter("@p0", utc));
+        PalORM.PostgreSql.PostgreSqlProvider.NormalizeCommandParameters(cmdUtc);
+        await Assert.That(ReferenceEquals(cmdUtc.Parameters[0].Value, utc)).IsTrue();
     }
 
     private sealed class UnregisteredEntity { public string Name { get; set; } = ""; }

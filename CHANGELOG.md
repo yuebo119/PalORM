@@ -2,6 +2,26 @@
 
 本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/) 规范。
 
+## [7.0.0] - 2026-11-24
+
+主版本跃迁：修复批分页自愈与投影守卫缺口，收紧元数据缓存并发可见性与熔断冷却契约，三条调用方可观察的行为变更由 💔 段列明，另修四项边界缺陷。
+
+### 💔 破坏性/行为变更
+
+- **Select+ToPage 改为抛异常**：此前该组合在 PostgreSQL 默认批分页路径静默返回全列实体，与「Select 投影必抛 NotSupportedException」契约分叉；改用 `QueryAsync<T>` 投影类型。PALORM033 诊断同步覆盖 ToPageAsync 终端。
+- **UPDATE 拒绝三类修饰符**：Select/WithCache/AsSplitQuery 此前在 UPDATE 构建路径静默丢弃，用户误以为生效；改为构建期抛 NotSupportedException，与 ExecuteDeleteAsync 同口径。移除相应修饰符即用。
+- **批分页连接故障后自愈**：PostgreSQL 默认单往返批分页此前无判死置位，外部终止连接后该入口持续用坏连接；现在失败即标脏、下一次调用自动重连。调用方只需容忍一次失败。
+
+### 变更要点
+
+- **元数据缓存原子化**：MemberResolver 列映射与 ColumnOrderValidator 列序快照的「值+代际」合并为单个 volatile 不可变引用，与上一版 EntityInfoCache 同型，消除注册表代际切换时的撕裂读。
+- **熔断写读序对齐**：CircuitBreaker.Open 的写序恢复为 RES-001 声明的「先 flag 后 generation」，与 Enter 读序配对，避免非探针成功记录抹掉开闸冷却期。
+- **共享连接所有权**：连接判死重建时仅在本会话拥有物理连接的前提下释放旧连接，不再误释放外部传入的共享连接。
+- **首行读同步分流**：GridReader.ReadFirstAsync 与 ReadAsync 同口径，按 Provider 能力走同步行读叶子。
+- **存储过程同步叶子判死**：StoredProcBuilder 的同步 reader 分支补连接失败回调，与异步分支对称。
+- **诊断版本对齐**：API参考版本头由 v6.8.0 更正为与真源一致的 v6.9.0（本版随升版至 7.0.0）。
+- **测试与地板**：新增 11 条测试（含 CI 门禁修复的 4 条覆盖补强），全仓 `[Test]` 声明 1706；Core 818 / SourceGen 273 / Integration 727。性能 A/B 三 SQLite 轮次确认本版改动无可测性能影响（分配 1.0000×、端到端时延噪声内）。
+
 ## [6.9.0] - 2026-11-23
 
 批量写入与时间类型默认行为向 PG 对齐，两处静默失败改调用期抛错；新增生命周期与存在性 API、迁移漂移检测与编译期诊断 PALORM054。
