@@ -1900,11 +1900,17 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
         return command.ExecuteNonQuery();
     }
 
-    /// <summary>读命令执行叶子——同步/异步按 Provider 能力分流（同 <see cref="ExecuteRowsCoreAsync"/>）。</summary>
+    /// <summary>读命令执行叶子——同步/异步按 Provider 能力分流（同 <see cref="ExecuteRowsCoreAsync"/>）。
+    /// <para>R1（2026-11-24）：与写叶子同口径，执行前按方言归一已绑定参数。INSERT … RETURNING 走本叶子
+    ///（非 key-only 分支），其生成 binder 用驱动工厂建参、绕过 <c>CreateParameter</c> 的创建期归一——
+    /// 缺这一支会让 PG 上 <c>Kind != Utc</c> 的 DateTime 参数被驱动拒绝或按会话时区静默写错。</para></summary>
     internal static ValueTask<DbDataReader> ExecuteReaderAsync(DbCommand command, CancellationToken ct)
-        => TProvider.PreferSynchronousIo
+    {
+        TProvider.NormalizeCommandParameters(command);
+        return TProvider.PreferSynchronousIo
             ? new ValueTask<DbDataReader>(ExecuteReaderSync(command, ct))
             : new ValueTask<DbDataReader>(command.ExecuteReaderAsync(ct));
+    }
 
     private static DbDataReader ExecuteReaderSync(DbCommand command, CancellationToken ct)
     {

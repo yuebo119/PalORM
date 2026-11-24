@@ -980,6 +980,10 @@ internal sealed class SessionOperationState
                 && _transactionOwner is null
                 && !operationOwnsTransaction)
             {
+                // E8-01（2026-11-24）：与 Park 的 P3-19 同型——本方法在取锁前先置 _disposing=1，
+                // 门禁拒绝时必须回滚，否则会话永久停留在「释放中」，此后每次 TryEnterFast 都
+                // 退化为锁路径（归还失败一次即全局降速）。Park 的同类回滚见该文件 :115-121。
+                Volatile.Write(ref _disposing, 0);
                 throw new InvalidOperationException(
                     "Complete or dispose the active transaction before disposing DataSession.");
             }

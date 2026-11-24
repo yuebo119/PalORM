@@ -87,6 +87,39 @@ public sealed class PooledDateTimeNormalizationTests
         await Assert.That(secondRead.Dt.Ticks).IsEqualTo(expectedTicks);
     }
 
+    /// <summary>R1（2026-11-24 证实档）：单条 INSERT … RETURNING 的归一化锁定。
+    /// 自增主键实体走 key-only RETURNING → ExecuteScalarCoreAsync，宽主键/非 key-only 走
+    /// ExecuteReaderAsync——两者都是静态核心叶子，8c4b7e3 归一只挂了 poison 包装叶子，遗漏了这两支。
+    /// 修复前真库实测：PG 18 / Npgsql 11 / Asia-Shanghai 下 Kind=Local 直接抛
+    /// InvalidCastException（"Could not bind parameter … to timestamp with time zone"）。
+    /// 本用例覆盖 key-only 标量分支；GetAsync 走 reader 叶子，顺带锁定 reader 分支归一。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PostgreSql_InsertReturning_NormalizesLocalDateTimeToUtc()
+    {
+        await using DataSession<PostgreSqlProvider> db = await CreateShanghaiSessionAsync();
+        await db.MigrateAsync();
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS cf_time_matrix");
+        await db.MigrateAsync();
+
+        DateTime localInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Local);
+        long expectedTicks = localInput.ToUniversalTime().Ticks;
+        var row = new CfTimeMatrixEntity
+        {
+            Dt = localInput,
+            Dto = new DateTimeOffset(DateTime.SpecifyKind(localInput, DateTimeKind.Utc)),
+            DateOnly = new DateOnly(2026, 7, 18),
+            TimeOnly = new TimeOnly(10, 30, 0)
+        };
+
+        await db.InsertAsync(row);  // key-only RETURNING → ExecuteScalarCoreAsync（R1 标量叶子）
+        CfTimeMatrixEntity read = (await db.GetAsync<CfTimeMatrixEntity>(row.Id))!; // reader 叶子
+        await Assert.That(read.Dt.Ticks).IsEqualTo(expectedTicks)
+            .Because("INSERT RETURNING 的参数由生成 binder 用驱动工厂建参，静态核心叶子须补归一；"
+                + "修复前标量叶子抛 InvalidCastException、reader 叶子按会话时区偏移");
+        await Assert.That(read.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+    }
+
     /// <summary>非 UTC 会话时区的测试会话：显式 Sql 设置，确保修复前的时区偏移缺陷可见。</summary>
     private static async Task<DataSession<PostgreSqlProvider>> CreateShanghaiSessionAsync()
     {

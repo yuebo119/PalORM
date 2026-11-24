@@ -388,10 +388,17 @@ public sealed partial class DataSession<TProvider>
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>R1（2026-11-24）：与读/写叶子同口径，执行前按方言归一已绑定参数。
+    /// INSERT … RETURNING 的 key-only 分支（自增主键实体默认走此路）经本叶子取回主键；
+    /// 这里是 8c4b7e3「5 叶子全归一」遗漏的静态标量叶子，真库实测 <c>Kind=Local</c> + 非 UTC 会话
+    /// 直接抛 <c>InvalidCastException</c>。归一幂等，重复调用无副作用。</summary>
     private static ValueTask<object?> ExecuteScalarCoreAsync(DbCommand command, CancellationToken ct)
-        => TProvider.PreferSynchronousIo
+    {
+        TProvider.NormalizeCommandParameters(command);
+        return TProvider.PreferSynchronousIo
             ? new ValueTask<object?>(ExecuteScalarSync(command, ct))
             : new ValueTask<object?>(command.ExecuteScalarAsync(ct));
+    }
 
     private static object? ExecuteScalarSync(DbCommand command, CancellationToken ct)
     {

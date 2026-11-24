@@ -34,6 +34,30 @@ public sealed class QueryCacheInjectionTests
     }
 
     [Test]
+    public async Task SelectProjection_WithCachedKey_StillThrows()
+    {
+        // E8-01（2026-11-24）：缓存命中在投影守卫之前 return，同 key 先被全实体查询填充后，
+        // 带 Select 的查询会绕过守卫、静默返回全列实体。这里锁定守卫必须先于缓存命中。
+        var cache = new CountingCache();
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync(cache);
+        await session.InsertAsync(new QueryCacheEntity { Name = "A" });
+
+        // 第一次：全实体查询填充缓存 key
+        _ = await session.From<QueryCacheEntity>()
+            .WithCache("projection-key", TimeSpan.FromMinutes(1)).ToListAsync();
+
+        // 第二次：同 key + Select 投影——缓存已命中，修复前直接返回全列，不抛
+        await Assert.That(async () => await session.From<QueryCacheEntity>()
+                .WithCache("projection-key", TimeSpan.FromMinutes(1))
+                .Select(x => x.Name)
+                .ToListAsync())
+            .Throws<NotSupportedException>()
+            .WithMessage(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.",
+                StringComparison.Ordinal);
+    }
+
+    [Test]
     public async Task TwoSessions_WithSeparateCaches_AreIsolated()
     {
         var cacheA = new BoundedQueryCache();

@@ -234,8 +234,14 @@ public sealed class SessionConcurrencyTests
                 .WithMessage(
                     "Complete or dispose the active transaction before disposing DataSession.",
                     StringComparison.Ordinal);
-            await transaction.CommitAsync();
 
+            // E8-01（2026-11-24）：门禁拒绝后必须回滚预置的 _disposing——与 Park 的 P3-19 同型。
+            // 残留会让后续每次 TryEnterFast 退化为锁路径（功能正确但全局降速）。
+            int disposingAfterReject = ReadDisposingFlag(session);
+            await Assert.That(disposingAfterReject).IsEqualTo(0)
+                .Because("DisposeAsync 预置 _disposing=1 后，活跃事务门禁拒绝时必须回滚");
+
+            await transaction.CommitAsync();
             await session.DisposeAsync();
         }
         finally
@@ -243,6 +249,21 @@ public sealed class SessionConcurrencyTests
             await session.DisposeAsync();
         }
     }
+
+    /// <summary>反射读私有 _disposing（仅测试用；产品代码禁反射）。
+    /// S3011 抑止理由：这是测试断言内部状态机标志，非生产越权访问——字段与会话实例均在本进程内，
+    /// 无用户输入、无反序列化、无安全边界。</summary>
+#pragma warning disable S3011
+    private static int ReadDisposingFlag(DataSession<SqliteProvider> session)
+    {
+        var stateField = typeof(DataSession<SqliteProvider>)
+            .GetField("_operationState", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        object state = stateField.GetValue(session)!;
+        var disposingField = state.GetType()
+            .GetField("_disposing", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        return (int)disposingField.GetValue(state)!;
+    }
+#pragma warning restore S3011
 
     [Test]
     public async Task DisposeDuringTransactionCallback_WaitsForScopeCompletion()
