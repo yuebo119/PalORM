@@ -49,4 +49,37 @@ internal sealed class SynchronousRowReadTests
             await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_syncrow_probe");
         }
     }
+
+    /// <summary>DIG-E6（2026-11-24）：GridReader.ReadFirstAsync 的同步首行读分流。
+    /// 显式开启 UseSynchronousRowRead 后走同步 Read 叶子，结果须与异步分流一致。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [NotInParallel("ExtBulkTable")]
+    public async Task MySql_SynchronousRowRead_GridReaderFirst_ReturnsFirstRow()
+    {
+        await using var session = await DataSession<MySqlProvider>.CreateAsync(new DbOptions
+        {
+            ConnectionString = TestEnvironment.ResolveMySqlConnectionString(),
+            UseSynchronousRowRead = true
+        });
+        await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_syncrow_probe");
+        await session.ExecuteAsync(
+            $"CREATE TABLE palorm_syncrow_probe (id BIGINT PRIMARY KEY, payload VARCHAR(64) NOT NULL)");
+        try
+        {
+            await session.ExecuteAsync(
+                $"INSERT INTO palorm_syncrow_probe (id, payload) VALUES (1, 'a'), (2, 'b')");
+
+            await using GridReader reader = await session.From<SyncReadProbeRow>().QueryMultipleAsync(
+                $"SELECT id, payload FROM palorm_syncrow_probe ORDER BY id; SELECT 1");
+            SyncReadProbeRow? first = await reader.ReadFirstAsync<SyncReadProbeRow>();
+            await Assert.That(first).IsNotNull();
+            await Assert.That(first!.id).IsEqualTo(1);
+            await Assert.That(first.payload).IsEqualTo("a");
+        }
+        finally
+        {
+            await session.ExecuteAsync($"DROP TABLE IF EXISTS palorm_syncrow_probe");
+        }
+    }
 }

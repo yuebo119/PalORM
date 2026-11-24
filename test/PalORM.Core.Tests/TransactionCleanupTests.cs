@@ -85,6 +85,17 @@ public sealed class TransactionCleanupTests
             SqlDialect.PostgreSql, primary)).IsTrue();
     }
 
+    /// <summary>A3（2026-11-24）：BulkOperationFramework 的网络方言裁决委托——
+    /// 固定 PG 语义，服务端错误跳过回滚、传输类失败照常回滚。</summary>
+    [Test]
+    public async Task BulkOperationFramework_CommitFailureDelegate_MatchesNetworkDialect()
+    {
+        await Assert.That(BulkOperationFramework.TrySkipRollbackAfterCommitFailure(
+            new InvalidOperationException("deadlock detected"))).IsTrue();
+        await Assert.That(BulkOperationFramework.TrySkipRollbackAfterCommitFailure(
+            new OperationCanceledException())).IsFalse();
+    }
+
     // ─── R3：回滚有界 ────────────────────────────────
 
     [Test]

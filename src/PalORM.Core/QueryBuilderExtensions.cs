@@ -1078,18 +1078,15 @@ public static class QueryBuilderExtensions
             await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
             // 第一结果集：COUNT 标量（ITM-637 同型面：null/零行显式报错不静默 0）
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
-                throw new InvalidOperationException(
-                    "COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
+                throw new InvalidOperationException("COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
             object? countResult = reader.GetValue(0);
             if (countResult is null)
-                throw new InvalidOperationException(
-                    "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+                throw new InvalidOperationException("COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
             long total = countResult is long count ? count : Convert.ToInt64(countResult);
 
             // 第二结果集：页行（ITM-712 容量封顶与经典路径同口径）
             if (!await reader.NextResultAsync(ct).ConfigureAwait(false))
-                throw new InvalidOperationException(
-                    "Paged query result set is missing from the batch response.");
+                throw new InvalidOperationException("Paged query result set is missing from the batch response.");
             List<T> rows = await ResultListReader.ReadAllAsync(
                 reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct,
                 syncRead: paged._syncRowRead).ConfigureAwait(false);

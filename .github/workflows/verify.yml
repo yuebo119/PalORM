@@ -110,6 +110,24 @@ jobs:
                   --coverage --coverage-output-format xml
                   --coverage-output "$(pwd)/cov-core.xml"
 
+            # T1-diff（2026-11-24）：SourceGen 侧改动行必须纳入统计。此前只传
+            # cov-core + cov-integration，SourceGen.Tests 覆盖的 25 行诊断/发射体改动
+            # 永远算未命中，门禁分母被结构性放大。本步生成第三份 XML 并在 diff job 合入。
+            - name: SourceGen tests (with coverage, for T1-diff)
+              run: >-
+                  dotnet run --project test/PalORM.SourceGen.Tests -c Release --no-build --
+                  --coverage --coverage-output-format xml
+                  --coverage-output "$(pwd)/cov-sourcegen.xml"
+
+            - name: Upload SourceGen coverage XML (for T1-diff)
+              if: always()
+              uses: actions/upload-artifact@v7
+              with:
+                  name: cov-sourcegen
+                  path: cov-sourcegen.xml
+                  retention-days: 7
+                  if-no-files-found: warn
+
             - name: Assert Core test counts (M0-3)
               run: >-
                   dotnet run --file scripts/assert-test-counts.cs --
@@ -335,6 +353,11 @@ jobs:
               with:
                   name: coverage-xml
 
+            - name: Download SourceGen coverage XML
+              uses: actions/download-artifact@v8
+              with:
+                  name: cov-sourcegen
+
             # 测试体系优化方案 2026-11-01 · T0-5：只统计本次改动涉及的行，阈值 80%。
             # 与 assert-coverage 分工：全量地板防整体退化，本步防"新增未覆盖代码靠
             # 分母增长溜过去"（2026-10-18 定 core 地板 74 后 src 新增 10 个文件把实测
@@ -358,7 +381,7 @@ jobs:
                     base="origin/main"
                   fi
                   echo "T1-diff base=$base"
-                  dotnet run --file scripts/diff-coverage.cs -- "$base" HEAD cov-core.xml cov-integration.xml
+                  dotnet run --file scripts/diff-coverage.cs -- "$base" HEAD cov-core.xml cov-integration.xml cov-sourcegen.xml
 
     gate:
         name: Quality Gates

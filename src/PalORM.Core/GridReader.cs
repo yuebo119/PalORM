@@ -111,9 +111,11 @@ public sealed class GridReader : IAsyncDisposable
             var typedFactory = (Func<DbDataReader, T>)factory;
             // DIG-E6（2026-11-24）：与 ReadAsync 的 syncRead 分流对齐——进程内引擎首行读
             // 同样免除驱动异步外壳开销。
-            bool hasRow = _syncRowRead
-                ? ReadRowSynchronously(_reader, ct)
-                : await _reader.ReadAsync(ct).ConfigureAwait(false);
+            bool hasRow;
+            if (_syncRowRead)
+                hasRow = ReadRowSynchronously(_reader, ct);
+            else
+                hasRow = await _reader.ReadAsync(ct).ConfigureAwait(false);
             if (hasRow)
             {
                 T result = typedFactory(_reader);

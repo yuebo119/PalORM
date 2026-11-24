@@ -54,6 +54,26 @@ internal sealed class QueryBuilderGuardTests
             .Throws<ArgumentException>();
     }
 
+    /// <summary>DIG-E4（2026-11-24）：UPDATE 的 Select/WithCache/AsSplitQuery 修饰符守卫。
+    /// 修复前这些修饰符在 UPDATE 构建路径静默丢弃，与 ExecuteDeleteAsync 的拒绝面不对称。</summary>
+    [Test]
+    public async Task Update_WithSelectOrCacheOrSplit_Rejected()
+    {
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        QueryBuilder<GuardProbeEntity> withSelect = session.From<GuardProbeEntity>().Set(static e => e.Value, 1L);
+        _ = withSelect.Select(static e => e.Id);
+        await Assert.That(() => withSelect.BuildUpdateSql()).Throws<NotSupportedException>();
+
+        QueryBuilder<GuardProbeEntity> withCache = session.From<GuardProbeEntity>().Set(static e => e.Value, 1L);
+        _ = withCache.WithCache("k", TimeSpan.FromMinutes(1));
+        await Assert.That(() => withCache.BuildUpdateSql()).Throws<NotSupportedException>();
+
+        QueryBuilder<GuardProbeEntity> withSplit = session.From<GuardProbeEntity>().Set(static e => e.Value, 1L);
+        _ = withSplit.AsSplitQuery();
+        await Assert.That(() => withSplit.BuildUpdateSql()).Throws<NotSupportedException>();
+    }
+
     private static async Task<DataSession<SqliteProvider>> CreateSessionAsync()
     {
         return await DataSession<SqliteProvider>.CreateAsync(new DbOptions

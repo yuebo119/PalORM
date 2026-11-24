@@ -589,5 +589,24 @@ public sealed class ProviderTests
         await Assert.That(options.CommandTimeoutSeconds).IsEqualTo(0);
     }
 
+    /// <summary>2026-11-24：PG 参数归一的 DateTime?[] 分支——Local 元素归一为 UTC、
+    /// 全 UTC 数组原样保留（覆盖 needsNormalization 两侧分支）。</summary>
+    [Test]
+    public async Task PostgreSqlProvider_NormalizeNullableDateTimeArray_BothBranches()
+    {
+        await using var cmd = new Npgsql.NpgsqlCommand();
+        DateTime?[] local = [new DateTime(2026, 7, 18, 10, 30, 0, DateTimeKind.Local)];
+        cmd.Parameters.Add(new Npgsql.NpgsqlParameter("@p0", local));
+        PalORM.PostgreSql.PostgreSqlProvider.NormalizeCommandParameters(cmd);
+        DateTime?[] normalized = (DateTime?[])cmd.Parameters[0].Value!;
+        await Assert.That(normalized[0]!.Value.Kind).IsEqualTo(DateTimeKind.Utc);
+
+        await using var cmdUtc = new Npgsql.NpgsqlCommand();
+        DateTime?[] utc = [new DateTime(2026, 7, 18, 2, 30, 0, DateTimeKind.Utc)];
+        cmdUtc.Parameters.Add(new Npgsql.NpgsqlParameter("@p0", utc));
+        PalORM.PostgreSql.PostgreSqlProvider.NormalizeCommandParameters(cmdUtc);
+        await Assert.That(ReferenceEquals(cmdUtc.Parameters[0].Value, utc)).IsTrue();
+    }
+
     private sealed class UnregisteredEntity { public string Name { get; set; } = ""; }
 }

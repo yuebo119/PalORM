@@ -101,23 +101,31 @@ public sealed class PooledDateTimeNormalizationTests
         await db.MigrateAsync();
         await db.ExecuteAsync($"DROP TABLE IF EXISTS cf_time_matrix");
         await db.MigrateAsync();
-
-        DateTime localInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Local);
-        long expectedTicks = localInput.ToUniversalTime().Ticks;
-        var row = new CfTimeMatrixEntity
+        try
         {
-            Dt = localInput,
-            Dto = new DateTimeOffset(DateTime.SpecifyKind(localInput, DateTimeKind.Utc)),
-            DateOnly = new DateOnly(2026, 7, 18),
-            TimeOnly = new TimeOnly(10, 30, 0)
-        };
+            DateTime localInput = new(2026, 7, 18, 10, 30, 0, DateTimeKind.Local);
+            long expectedTicks = localInput.ToUniversalTime().Ticks;
+            var row = new CfTimeMatrixEntity
+            {
+                Dt = localInput,
+                Dto = new DateTimeOffset(DateTime.SpecifyKind(localInput, DateTimeKind.Utc)),
+                DateOnly = new DateOnly(2026, 7, 18),
+                TimeOnly = new TimeOnly(10, 30, 0)
+            };
 
-        await db.InsertAsync(row);  // key-only RETURNING → ExecuteScalarCoreAsync（R1 标量叶子）
-        CfTimeMatrixEntity read = (await db.GetAsync<CfTimeMatrixEntity>(row.Id))!; // reader 叶子
-        await Assert.That(read.Dt.Ticks).IsEqualTo(expectedTicks)
-            .Because("INSERT RETURNING 的参数由生成 binder 用驱动工厂建参，静态核心叶子须补归一；"
-                + "修复前标量叶子抛 InvalidCastException、reader 叶子按会话时区偏移");
-        await Assert.That(read.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+            await db.InsertAsync(row);  // key-only RETURNING → ExecuteScalarCoreAsync（R1 标量叶子）
+            CfTimeMatrixEntity read = (await db.GetAsync<CfTimeMatrixEntity>(row.Id))!; // reader 叶子
+            await Assert.That(read.Dt.Ticks).IsEqualTo(expectedTicks)
+                .Because("INSERT RETURNING 的参数由生成 binder 用驱动工厂建参，静态核心叶子须补归一；"
+                    + "修复前标量叶子抛 InvalidCastException、reader 叶子按会话时区偏移");
+            await Assert.That(read.Dt.Kind).IsEqualTo(DateTimeKind.Utc);
+        }
+        finally
+        {
+            // 本类多个用例共享 cf_time_matrix；只清理本用例插入的行，不 DROP 表，
+            // 避免与并发用例的建表/读表窗口互相干扰（T6 要求 finally 清理）。
+            await db.ExecuteAsync($"DELETE FROM cf_time_matrix");
+        }
     }
 
     /// <summary>非 UTC 会话时区的测试会话：显式 Sql 设置，确保修复前的时区偏移缺陷可见。</summary>
