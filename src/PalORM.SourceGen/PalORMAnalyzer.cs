@@ -184,8 +184,8 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
 
     // PALORM033：实体查询后 Select(projection).ToListAsync()——QueryBuilderExtensions.cs:36 throw。
     public static readonly DiagnosticDescriptor SelectProjectionWithToList = new(
-        "PALORM033", "Select(projection) followed by ToListAsync/FirstAsync always throws",
-        "Select(projection) followed by ToListAsync/FirstAsync/SingleAsync always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
+        "PALORM033", "Select(projection) followed by a terminal query always throws",
+        "Select(projection) followed by ToListAsync/FirstAsync/SingleAsync/ToPageAsync always throws NotSupportedException at runtime", "PalORM", DiagnosticSeverity.Error, true);
 
     // === v5.0 扩充：防静默错误（PALORM034-037, 040）——前版误剔的修正 ===
 
@@ -555,7 +555,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                 {
                     if (member.Expression is IdentifierNameSyntax id
                         && id.Identifier.Text == receiverName
-                        && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync")
+                        && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync" or "ToPageAsync")
                     {
                         terminalStmt = exprStmt;
                         break;
@@ -611,7 +611,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
                      .OfType<MemberAccessExpressionSyntax>())
         {
             if (member.Expression is IdentifierNameSyntax id
-                && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync"
+                && member.Name.Identifier.Text is "ToListAsync" or "FirstAsync" or "SingleAsync" or "ToPageAsync"
                 && SymbolEqualityComparer.Default.Equals(
                     ctx.SemanticModel.GetSymbolInfo(id, ctx.CancellationToken).Symbol, selectReceiver))
             {

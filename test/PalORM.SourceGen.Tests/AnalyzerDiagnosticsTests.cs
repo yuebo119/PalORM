@@ -1528,6 +1528,34 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Test]
+    public async Task PALORM033_SameBuilderProjectionThenToPage_Reports()
+    {
+        // DIG-B2（2026-11-24）：ToPageAsync 是 entity 查询的另一个终端——Select 投影后调用同样必抛
+        // NotSupportedException（运行期守卫与 PALORM033 诊断此前都只覆盖 ToList/First/Single）。
+        const string source = """
+            using PalORM;
+            [Table("t")]
+            public sealed class E
+            {
+                [Key] public long Id { get; set; }
+                [Column("name")] public string Name { get; set; } = "";
+            }
+            public static class C
+            {
+                static async System.Threading.Tasks.Task M<TProvider>(DataSession<TProvider> s)
+                    where TProvider : IDbProvider
+                {
+                    var b = s.From<E>();
+                    b.Select(x => x.Id);
+                    await b.ToPageAsync(10, x => x.Id);
+                }
+            }
+            """;
+        (ImmutableArray<Diagnostic> diagnostics, _) = await AnalyzeAsync(source);
+        await Assert.That(diagnostics.Any(d => d.Id == "PALORM033")).IsTrue();
+    }
+
+    [Test]
     public async Task PALORM040_NonNullableStringWithoutRequired_DoesNotReport()
     {
         // ITM-718(r20)：非可空 NRT string 无 [Required]——MigrationEmitter 判据

@@ -58,6 +58,23 @@ public sealed class QueryCacheInjectionTests
     }
 
     [Test]
+    public async Task SelectProjection_ToPageAsync_StillThrows()
+    {
+        // DIG-B2（2026-11-24）：ToPageAsync 是第五个执行入口，批分页内核不经过
+        // ExecuteListAsync 的投影守卫。这里锁定守卫在 ToPageEntry 入口即触发——修复前
+        // 该调用静默返回全列实体（SQLite 走经典路径虽间接触发，PG 批路径则绕过）。
+        await using DataSession<SqliteProvider> session = await CreateSessionAsync();
+
+        await Assert.That(async () => await session.From<QueryCacheEntity>()
+                .Select(x => x.Name)
+                .ToPageAsync(10, x => x.Id))
+            .Throws<NotSupportedException>()
+            .WithMessage(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.",
+                StringComparison.Ordinal);
+    }
+
+    [Test]
     public async Task TwoSessions_WithSeparateCaches_AreIsolated()
     {
         var cacheA = new BoundedQueryCache();

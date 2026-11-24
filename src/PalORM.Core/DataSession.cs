@@ -1458,7 +1458,11 @@ public sealed partial class DataSession<TProvider> : IAsyncDisposable, IQuerySes
             InvalidateReusableCommands();
             _conn = created;
             Volatile.Write(ref _connectionPoisoned, 0);
-            old.Dispose();
+            // DIG-E5（2026-11-24）：ownsConnection=false 时 old 是调用方持有的共享连接，
+            // 判死重建只换会话引用，不替调用方释放物理连接——与 DisposeConnectionIfOwnedAsync
+            // 及关闭路径的所有权判据同口径。
+            if (_ownsConnection)
+                old.Dispose();
         }
         catch
         {

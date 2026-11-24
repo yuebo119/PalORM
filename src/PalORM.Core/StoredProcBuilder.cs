@@ -187,7 +187,8 @@ public sealed class StoredProcBuilder
         DbDataReader reader;
         if (_syncIo)
         {
-            reader = OpenReaderSynchronously(cmd, ct);
+            try { reader = OpenReaderSynchronously(cmd, ct); }
+            catch (Exception ex) { _connectionFailureHandler?.Invoke(ex); throw; }
         }
         else
         {

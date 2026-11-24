@@ -798,6 +798,13 @@ public static class QueryBuilderExtensions
     {
         using SessionOperationState.SessionOperationLease operationLease =
             builder._operationState.EnterReadOnly();
+        // DIG-B2（2026-11-24）：ToPageAsync 是第五个执行入口，投影守卫必须与 ToList/
+        // ForEach/ExecuteList/ExecuteQueryRows 四入口同口径。批分页内核直接用 _factory 物化
+        // 全列实体而不过 ExecuteListAsync，且 PALORM033 对链式调用无能为力——缺此守卫时
+        // Select(...).ToPageAsync() 静默返回全列，与「Select 投影必抛」契约分叉。
+        if (builder._selectColumns is not null)
+            throw new NotSupportedException(
+                "Partial Select projection is not supported for entity queries; use the full entity query or an explicit QueryAsync projection type.");
         var paged = builder.CloneForExecution();
         paged._useReadRoute = false;
         // FLT-5（2026-11-23）：分页路径全程直用 paged._conn（建事务/建批/建命令），不经
@@ -1066,25 +1073,36 @@ public static class QueryBuilderExtensions
             pageCommand.Parameters.Add(pageParameters[i]);
         batch.BatchCommands.Add(pageCommand);
 
-        await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // 第一结果集：COUNT 标量（ITM-637 同型面：null/零行显式报错不静默 0）
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
-            throw new InvalidOperationException(
-                "COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
-        object? countResult = reader.GetValue(0);
-        if (countResult is null)
-            throw new InvalidOperationException(
-                "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
-        long total = countResult is long count ? count : Convert.ToInt64(countResult);
+        try
+        {
+            await using DbDataReader reader = await batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            // 第一结果集：COUNT 标量（ITM-637 同型面：null/零行显式报错不静默 0）
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    "COUNT query returned no row — the ADO.NET driver behaved unexpectedly.");
+            object? countResult = reader.GetValue(0);
+            if (countResult is null)
+                throw new InvalidOperationException(
+                    "COUNT query returned null scalar — the ADO.NET driver behaved unexpectedly.");
+            long total = countResult is long count ? count : Convert.ToInt64(countResult);
 
-        // 第二结果集：页行（ITM-712 容量封顶与经典路径同口径）
-        if (!await reader.NextResultAsync(ct).ConfigureAwait(false))
-            throw new InvalidOperationException(
-                "Paged query result set is missing from the batch response.");
-        List<T> rows = await ResultListReader.ReadAllAsync(
-            reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct,
-            syncRead: paged._syncRowRead).ConfigureAwait(false);
-        return (rows, total);
+            // 第二结果集：页行（ITM-712 容量封顶与经典路径同口径）
+            if (!await reader.NextResultAsync(ct).ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    "Paged query result set is missing from the batch response.");
+            List<T> rows = await ResultListReader.ReadAllAsync(
+                reader, paged._factory, Math.Min(pageSize, MaxPreallocatedCapacity), ct,
+                syncRead: paged._syncRowRead).ConfigureAwait(false);
+            return (rows, total);
+        }
+        catch (Exception exception)
+        {
+            // DIG-B1（2026-11-24）：批分页是 ToPageAsync 的默认路径（PG + RC），此前全程无
+            // 判死置位——异常绕过经典路径 :915 唯一置位点，外部终止连接后该入口不自愈，
+            // 与 CHANGELOG 6.9.0「判死覆盖 ToPageAsync」承诺冲突。与其它执行叶子同构。
+            paged._session?.MarkConnectionPoisoned(exception);
+            throw;
+        }
     }
 
     /// <summary>P0-1：把参数拷贝进 COUNT 批命令（名称/类型/值三件套；源对象归页命令或子句所有，

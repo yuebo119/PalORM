@@ -1207,6 +1207,12 @@ public struct QueryBuilder<T> where T : class, new()
             throw new NotSupportedException(
                 "UPDATE does not support Take/Skip; the LIMIT would be silently dropped and widen the affected rows. " +
                 "Use Where() to bound the update, or BulkUpdateAsync for row-by-row.");
+        // DIG-E4（2026-11-24）：与 DELETE 的 HasIgnoredExecutionModifiers 同口径——Select/
+        // WithCache/AsSplitQuery 在 UPDATE 路径同样静默丢弃，此前只拒 Take/Skip。
+        if (_selectColumns is not null || _cacheKey is not null || _splitQuery)
+            throw new NotSupportedException(
+                "UPDATE does not support Select/WithCache/AsSplitQuery; they would be silently dropped. " +
+                "Use ExecuteNonQueryAsync with the full entity mapping, or remove the modifier.");
         var sb = new ValueStringBuilder(stackalloc char[256]);
         try
         {

@@ -73,6 +73,58 @@ public sealed class PagedBatchIntegrationTests
         }
     }
 
+    /// <summary>DIG-B2（2026-11-24）：批分页是第五个执行入口，直接用 _factory 物化全列实体，
+    /// 不经过 ExecuteListAsync 的投影守卫。修复前 Select(...).ToPageAsync() 在 PG 默认批路径
+    /// 静默返回全列，与「Select 投影必抛 NotSupportedException」契约分叉。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    public async Task PG_ToPage_BatchedPath_SelectProjection_Throws()
+    {
+        await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+        await db.ExecuteAsync($"CREATE TABLE palorm_page_batch (id BIGINT PRIMARY KEY, seq BIGINT NOT NULL)");
+
+        await Assert.That(async () => await db.From<PageBatchEntity>()
+                .Select(x => x.Seq)
+                .ToPageAsync(10, o => o.Seq, descending: true))
+            .Throws<NotSupportedException>();
+
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+    }
+
+    /// <summary>DIG-B1（2026-11-24）：批分页是 ToPageAsync 的默认路径，此前无判死置位——
+    /// 外部终止连接后该入口不自愈，与 CHANGELOG 6.9.0「判死覆盖 ToPageAsync」承诺冲突。</summary>
+    [Test]
+    [Property("Category", "ExternalDatabase")]
+    [Property("Category", "FaultInjection")]
+    public async Task PG_ToPage_BatchedPath_ConnectionFault_SessionSelfHeals()
+    {
+        await using DataSession<PostgreSqlProvider> db = await TestDb.PostgreSqlAsync();
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+        await db.ExecuteAsync($"CREATE TABLE palorm_page_batch (id BIGINT PRIMARY KEY, seq BIGINT NOT NULL)");
+        await db.InsertAsync(new PageBatchEntity { Id = 1, Seq = 1 });
+
+        long backendPid = await db.ScalarAsync<long>($"SELECT pg_backend_pid()");
+        await using (var killer = await TestDb.PostgreSqlAsync())
+            await killer.ExecuteAsync($"SELECT pg_terminate_backend(({backendPid})::int)");
+
+        Exception? first = null;
+        try
+        {
+            _ = await db.From<PageBatchEntity>().ToPageAsync(10, o => o.Seq, descending: true);
+        }
+        catch (Exception ex) { first = ex; }
+        await Assert.That(first).IsNotNull();
+
+        // 判死置位后下一次调用自动重连成功（修复前持续使用坏连接，此处抛异常）
+        (List<PageBatchEntity> rows, long total) = await db.From<PageBatchEntity>()
+            .ToPageAsync(10, o => o.Seq, descending: true);
+        await Assert.That(total).IsEqualTo(1);
+        await Assert.That(rows.Count).IsEqualTo(1);
+
+        await db.ExecuteAsync($"DROP TABLE IF EXISTS palorm_page_batch");
+    }
+
     [Test]
     [Property("Category", "ExternalDatabase")]
     public async Task PG_ToPage_BatchedPath_SoftDeleteFilterAppliesToCountAndRows()
