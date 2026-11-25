@@ -1,7 +1,7 @@
 # PalORM API 参考
 
 > v6.9.0 · .NET 11 · C# 15 · 源生成器驱动 · 零运行时反射
-> 测试: 全仓库 1713 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
+> 测试: 全仓库 1718 项 `[Test]` 声明（Core + SourceGen + Integration；外部 DB 测试标注 `Category=ExternalDatabase` 不计入 badge，B14 口径）
 > 构建: 0 警告 / 0 错误（SonarAnalyzer P0+P1 全 error）
 > Native AOT: 三 Provider publish + 原生运行通过
 
@@ -20,7 +20,7 @@
 | M4 | `[Unique]` / `[Index]` | `Annotations.cs` | 三方言索引 DDL（ADR-B） |
 | M5 | `[Index(name,cols,unique)]` | `Annotations.cs` | 复合索引 |
 
-### 编译时验证 — 46 条 PALORM 诊断（43 条分析器 + 3 条生成器：PALORM041/045/046）
+### 编译时验证 — 47 条 PALORM 诊断（44 条分析器 + 3 条生成器：PALORM041/045/046）
 > PALORM006/007 已删除（006 由 SqlFileEmitter Obsolete-error 机制承担，007 占位移除）。
 > PALORM017 已删除（r24，ITM-899）：v6.1 起 StoreAs 参与读写双路径后停报，描述符与
 > 空方法为死残留——ID 永不复用（诊断编号历史保留记录）。
