@@ -10,7 +10,7 @@
     }
   },
   "PalORM.SourceGen.Tests": {
-    "passed": 273
+    "passed": 278
   },
   "PalORM.Integration.Tests": {
     "passed": 727,
