@@ -210,7 +210,9 @@ public sealed class QueryPipeline<TProvider> : IDisposable
         foreach (PipelineItem item in _items)
         {
             DbBatchCommand command = batch.CreateBatchCommand();
-            command.CommandText = item.Sql;
+            // P0-1：MySQL 下批命令文本加尾随空格，避免驱动的"批内文本已全部预编译"判定
+            // 把该批从单包拼接降级为逐条发送（见 BatchCommandText）。
+            command.CommandText = BatchCommandText.For(TProvider.Dialect, item.Sql);
             AddParameters(command, item.Parameters);
             batch.BatchCommands.Add(command);
             QueryBuilderExtensions.NotifyInterceptorsOnBefore(item.Interceptors, item.Context);

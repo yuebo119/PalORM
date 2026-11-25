@@ -1063,12 +1063,13 @@ public static class QueryBuilderExtensions
         batch.Timeout = DbOptions.ToCommandTimeoutSeconds(paged._commandTimeout);
 
         DbBatchCommand countCommand = batch.CreateBatchCommand();
-        countCommand.CommandText = countSql;
+        // P0-1：MySQL 下批命令文本加尾随空格，保持单包拼接（见 BatchCommandText）。
+        countCommand.CommandText = BatchCommandText.For(paged._dialect, countSql);
         AddBatchParameterCopies(countCommand, countParameters);
         batch.BatchCommands.Add(countCommand);
 
         DbBatchCommand pageCommand = batch.CreateBatchCommand();
-        pageCommand.CommandText = pageSql;
+        pageCommand.CommandText = BatchCommandText.For(paged._dialect, pageSql);
         for (int i = 0; i < pageParameters.Count; i++)
             pageCommand.Parameters.Add(pageParameters[i]);
         batch.BatchCommands.Add(pageCommand);

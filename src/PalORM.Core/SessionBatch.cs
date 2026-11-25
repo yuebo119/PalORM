@@ -118,7 +118,9 @@ public sealed class SessionBatch<TProvider> : IDisposable
                 foreach ((string sql, FormattableString? values) in statements)
                 {
                     DbBatchCommand command = batch.CreateBatchCommand();
-                    command.CommandText = sql;
+                    // P0-1：MySQL 下批命令文本加尾随空格——保持驱动的单包拼接路径
+                    //（见 BatchCommandText），参数集合与执行语义不受影响。
+                    command.CommandText = BatchCommandText.For(TProvider.Dialect, sql);
                     AddParameters(command.Parameters, values);
                     batch.BatchCommands.Add(command);
                 }
