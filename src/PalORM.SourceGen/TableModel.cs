@@ -98,6 +98,12 @@ internal sealed record TableModel(
                 .NamedArguments.FirstOrDefault(na => na.Key == "AutoIncrement").Value.Value is not false;
             bool isAutoIncrement = isKey && autoIncrementEnabled
                 && prop.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
+            // P1-2（2026-11-26）：[Key(PreventIdReuse = true)] 让 SQLite 自增主键生成 AUTOINCREMENT
+            // （禁止 ROWID 复用）。默认 false：官方文档称该关键字有额外 CPU/内存/磁盘开销，
+            // 本仓实测 20 万行顺序插入慢 43%。仅对 isAutoIncrement 为真的列有意义。
+            bool preventIdReuse = isAutoIncrement && prop.GetAttributes()
+                .FirstOrDefault(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key))?
+                .NamedArguments.FirstOrDefault(na => na.Key == "PreventIdReuse").Value.Value is true;
             bool ignoreOnInsert = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.IgnoreOnInsert));
             bool isConcurrencyToken = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.ConcurrencyCheck));
             bool isTimestamp = prop.GetAttributes().Any(a => SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Timestamp));
@@ -239,7 +245,8 @@ internal sealed record TableModel(
                     && converterType.GetMembers("FromProvider").OfType<IMethodSymbol>().Any(static m =>
                         !m.IsStatic && m.DeclaredAccessibility == Accessibility.Public && m.Parameters.Length == 1)
                     && converterType.GetMembers("ToProvider").OfType<IMethodSymbol>().Any(static m =>
-                        !m.IsStatic && m.DeclaredAccessibility == Accessibility.Public && m.Parameters.Length == 1)));
+                        !m.IsStatic && m.DeclaredAccessibility == Accessibility.Public && m.Parameters.Length == 1),
+                PreventIdReuse: preventIdReuse));
         }
 
         bool isSoftDelete = typeSymbol.GetAttributes().Any(a =>
@@ -463,7 +470,11 @@ internal sealed record ColumnModel(
     bool IsTenantColumn = false,
     // M4.7（2026-10-31）：转换器是否以 public 实例方法隐式实现 FromProvider/ToProvider。
     // 为 true 时 Emitter 用具体类型声明字段（可去虚化/内联）；显式接口实现保持接口字段。
-    bool ConverterConcreteCall = false)
+    bool ConverterConcreteCall = false,
+    // P1-2（2026-11-26）：SQLite 自增主键是否生成 AUTOINCREMENT（禁止 ROWID 复用）。
+    // 默认 false：官方文档称该关键字有额外 CPU/内存/磁盘开销，本仓实测顺序插入慢 43%。
+    // 仅对 SQLite 生效，仅 [Key] 自增列有意义（TableModel 侧已按 isAutoIncrement 门控）。
+    bool PreventIdReuse = false)
 {
     internal bool IsInsertable =>
         !IgnoreOnInsert && !IsAutoIncrement && ComputedExpression is null && !IsTimestamp;

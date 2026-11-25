@@ -78,6 +78,40 @@ public sealed class MaterializedCapacityHintTests
         await Assert.That(small.Capacity)
             .IsLessThanOrEqualTo(SqlLimits.MaxMaterializedCapacityHint);
     }
+
+    /// <summary>P1-1（2026-11-26）：一次大结果集查询不得把同实体后续小结果集查询的容量
+    /// 永久抬高。原实现只上调提示、且小结果集不记录，2000 行的 GetAllAsync 会让后续单行
+    /// 查询按 2000 分配（实测分配 1.2 KB → 16.7 KB；池化会话跨租期保留该记录，是稳态
+    /// 而非偶发）。修法是把记录规则改为自适应收缩（超过本次规模的 4 倍即下调）。</summary>
+    [Test]
+    public async Task LargeQueryThenSingleRowQuery_ShrinksCapacityBackToDefault()
+    {
+        await using var db = await DataSession<SqliteProvider>.CreateAsync(new DbOptions
+        {
+            ConnectionString = "Data Source=:memory:"
+        });
+        await db.MigrateAsync();
+        await db.ExecuteAsync($"""
+            WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 2000)
+            INSERT INTO cap_probe (Id, Name) SELECT x, 'n' FROM seq
+            """);
+
+        var all = await db.GetAllAsync<CapProbe>();
+        await Assert.That(all.Count).IsEqualTo(2000);
+
+        // 容量提示是读取前的预测，因此下调必然滞后一次：第一次小查询仍按旧提示 2000 分配。
+        var firstSmall = await db.From<CapProbe>().Where($"Id = {7}").ToListAsync();
+        await Assert.That(firstSmall.Count).IsEqualTo(1);
+        await Assert.That(firstSmall.Capacity).IsEqualTo(2000);
+
+        // 本次读取记录到 1 行（2000 > 16 × 4 触发收缩），下一次同实体查询回到默认容量。
+        var secondSmall = await db.From<CapProbe>().Where($"Id = {8}").ToListAsync();
+        await Assert.That(secondSmall.Capacity).IsEqualTo(16);
+
+        // 第三次确认收缩稳定，不会因再次读到 1 行而回弹。
+        var thirdSmall = await db.From<CapProbe>().Where($"Id = {9}").ToListAsync();
+        await Assert.That(thirdSmall.Capacity).IsEqualTo(16);
+    }
 }
 
 [Table("cap_probe")]

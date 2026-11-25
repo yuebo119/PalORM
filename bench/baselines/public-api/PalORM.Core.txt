@@ -571,6 +571,7 @@ P:PalORM.IndexAttribute|Columns|System.String[]
 P:PalORM.IndexAttribute|Name|System.String
 P:PalORM.IndexAttribute|Unique|System.Boolean
 P:PalORM.KeyAttribute|AutoIncrement|System.Boolean
+P:PalORM.KeyAttribute|PreventIdReuse|System.Boolean
 P:PalORM.MigrationFailure|ErrorType|System.String
 P:PalORM.MigrationFailure|Statement|System.String
 P:PalORM.MigrationResult|CreatedIndexes|System.Collections.Generic.IReadOnlyList`1[[System.String, System.Private.CoreLib]]

@@ -176,6 +176,17 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         + "optimistic locking, so this call throws NotSupportedException at runtime (use InsertAsync for new rows or "
         + "UpdateAsync, which enforces the version check)", "PalORM", DiagnosticSeverity.Error, true);
 
+    // PALORM055（P1-2，2026-11-26）：[Key(PreventIdReuse = true)] 与 AutoIncrement = false 同时出现
+    // 是矛盾组合——应用侧赋值的主键不经 SQLite 的 ROWID 分配，AUTOINCREMENT 无从生效，属静默无效
+    // 配置。Error 级：与 PALORM042/047/048 的互斥参数诊断同口径（配置错误在编译期定位，而非
+    // 生成一份用户以为"已禁止 ID 复用"的 DDL）。
+    public static readonly DiagnosticDescriptor KeyPreventIdReuseWithoutAutoIncrement = new(
+        "PALORM055", "[Key(PreventIdReuse = true)] has no effect together with AutoIncrement = false",
+        "Property '{0}' on type '{1}' sets [Key(PreventIdReuse = true)] together with AutoIncrement = false; "
+        + "ROWID reuse only applies to database-generated keys, so PreventIdReuse has no effect. "
+        + "Remove PreventIdReuse, or leave AutoIncrement at its default (true).",
+        "PalORM", DiagnosticSeverity.Error, true);
+
     // PALORM032：Include/Join 引用未注册实体——QueryBuilder.cs GetRegisteredTableName 的未注册实体 throw（r9-S-E：原字面锚本就指错，语义锚修正）。
     // Warning 级：多程序集场景同 PALORM003 局限。
     public static readonly DiagnosticDescriptor JoinReferencesUnregisteredEntity = new(
@@ -313,7 +324,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
          DefaultValueConflicts, InvalidDefaultValueExpression,
          ProjectionTableConflict, ProjectionOwnedJsonUnsupported,
          InvalidColumnSchemaArgs,
-         IndexNameTooLong, StoreAsMisuse];
+         IndexNameTooLong, StoreAsMisuse, KeyPreventIdReuseWithoutAutoIncrement];
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Maintainability",
         "S3776:CognitiveComplexity",
@@ -1054,6 +1065,7 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
             CheckColumnSchemaArgValidity(ctx, type, member);                      // PALORM051（R3，v6.0）
             CheckConverterOwnedJsonConflict(ctx, type, member);                   // PALORM027
             CheckKeyNonDefaultValue(ctx, type, member);                           // PALORM034
+            CheckKeyPreventIdReuseConflict(ctx, type, member);                    // PALORM055（P1-2）
             CheckConcurrencyCheckWithIgnoreOnInsert(ctx, type, member);           // PALORM035
             CheckRequiredWithNullableAnnotation(ctx, type, member);               // PALORM037
         }
@@ -1196,6 +1208,27 @@ public sealed class PalORMAnalyzer : DiagnosticAnalyzer
         if (keyAttr.NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is false)
             return false;
         return member.Type.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32;
+    }
+
+    /// <summary>PALORM055（P1-2，2026-11-26）：[Key(PreventIdReuse = true)] 与显式
+    /// <c>AutoIncrement = false</c> 同时出现时报告——应用侧赋值的主键不经 ROWID 分配，
+    /// AUTOINCREMENT 无从生效，配置静默无效。
+    /// <para>只查「两者都显式给出」的形态：<c>PreventIdReuse</c> 单写在 short/byte 主键上
+    /// （类型本就不自增）由 PALORM022 的显式 <c>AutoIncrement = false</c> 要求覆盖，不在此重复报。</para></summary>
+    private static void CheckKeyPreventIdReuseConflict(
+        SymbolAnalysisContext ctx, INamedTypeSymbol type, IPropertySymbol member)
+    {
+        var keyAttr = member.GetAttributes().FirstOrDefault(a =>
+            SourceGenerationValidation.IsPalORMAttribute(a, PalORMAttributeNames.Key));
+        if (keyAttr is null) return;
+        if (keyAttr.NamedArguments.FirstOrDefault(static na => na.Key == "PreventIdReuse").Value.Value is not true)
+            return;
+        if (keyAttr.NamedArguments.FirstOrDefault(static na => na.Key == "AutoIncrement").Value.Value is not false)
+            return;
+        ctx.ReportDiagnostic(Diagnostic.Create(
+            KeyPreventIdReuseWithoutAutoIncrement,
+            member.Locations.FirstOrDefault() ?? type.Locations[0],
+            member.Name, type.Name));
     }
 
     /// <summary>PALORM048：[DefaultValue] 表达式含 NUL 或括号不平衡（R2，v6.0）——与 PALORM044 同型。</summary>

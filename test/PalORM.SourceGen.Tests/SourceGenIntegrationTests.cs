@@ -400,11 +400,15 @@ internal sealed class SourceGenIntegrationTests
     public async Task CreateTableSqlByDialect_IsGenerated()
     {
         // 评审 2026-09-02 第二批（ADR-J）：legacy CreateTableSql 已从生成物移除——方言 DDL 是
-        // 唯一真源（SQLite 双引号标识符 + AUTOINCREMENT 主键 + NOT NULL）。
+        // 唯一真源（SQLite 双引号标识符 + NOT NULL）。
         var ddl = PalORM_Runtime.CreateTableSqlByDialect[typeof(TestUser)].Get(SqlDialect.Sqlite);
         await Assert.That(ddl).Contains("CREATE TABLE IF NOT EXISTS \"test_users\"");
         await Assert.That(ddl).Contains("NOT NULL");
-        await Assert.That(ddl).Contains("PRIMARY KEY AUTOINCREMENT");
+        // P1-2（2026-11-26）：自增主键默认不再发射 AUTOINCREMENT（SQLite 官方文档称该关键字
+        // 有额外 CPU/内存/磁盘开销，本仓实测 20 万行顺序插入慢 43%）。需要「ROWID 不复用且
+        // 单调」语义的实体显式标注 [Key(PreventIdReuse = true)]，由 KeyPreventIdReuseTests 锁定。
+        await Assert.That(ddl).Contains("INTEGER PRIMARY KEY");
+        await Assert.That(ddl).DoesNotContain("AUTOINCREMENT");
         // 新生成器片段不再携带 legacy 载荷
         await Assert.That(PalORM_Runtime.CreateTableSql.ContainsKey(typeof(TestUser))).IsFalse();
     }

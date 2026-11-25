@@ -1218,7 +1218,9 @@ public partial class DataSession<TProvider>
             for (int i = start; i < end; i++)
             {
                 var batchCommand = batch.CreateBatchCommand();
-                batchCommand.CommandText = input.UpdateSql;
+                // P0-1：MySQL 下批命令文本加尾随空格，保持驱动的单包拼接
+                //（见 BatchCommandText）。BindIntoBatchCommand 只写参数值，不读文本。
+                batchCommand.CommandText = BatchCommandText.For(TProvider.Dialect, input.UpdateSql);
                 BindIntoBatchCommand(batchCommand, input.Pool, input.ValuesBinder, input.Entities[i]);
                 batch.BatchCommands.Add(batchCommand);
             }
