@@ -513,37 +513,73 @@ internal sealed class SessionOperationState
     private int _materializedCount;
     private System.Collections.Concurrent.ConcurrentDictionary<Type, int>? _materializedCapacity;
 
+    /// <summary>容量提示的下限——与「无记录」时的取值一致，也是小结果集与未记录共用的值。</summary>
+    private const int MinCapacityHint = 16;
+
+    /// <summary>收缩阈值：当前提示超过本次规模的 4 倍（槽位空置超 75%）即下调到本次规模。
+    /// 取 4 而非 2，是为了让行数的正常波动（例如 20 行与 40 行之间）不触发反复改写。</summary>
+    private const int ShrinkFactor = 4;
+
+    /// <summary>由「当前提示 + 本次行数」算出下一次应记录的提示（纯函数，内联槽与字典两条
+    /// 存储路径共用）。三种结果：上调（本次超过当前）、下调（当前远大于本次）、保持不动
+    /// （避免同规模重复查询每次都写一次）。
+    /// <para><b>为什么必须能下调</b>（P1-1，2026-11-26）：原实现只上调、且小结果集不记录，
+    /// 于是一次 2000 行的查询会把提示永久钉住——同实体后续的单行查询按 2000 分配，实测
+    /// 分配从 1.2 KB 涨到 16.7 KB，且池化会话跨租期保留该记录。按查询形状分键不能解决
+    /// 该问题（同一形状的行数方差可以很大，例如 <c>WHERE status = @p0</c>），故判据放在
+    /// 「本次行数相对当前提示」上，与形状无关。</para></summary>
+    private static int NextCapacityHint(int current, int target)
+    {
+        if (target > current)
+            return target;
+        int floor = Math.Max(target, MinCapacityHint);
+        return current > floor * ShrinkFactor ? floor : current;
+    }
+
     /// <summary>取会话内上次同实体物化行数（无记录 16）。</summary>
     internal int GetMaterializedCapacity<T>() where T : class, new()
     {
         System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
         if (dict is not null && dict.TryGetValue(typeof(T), out int cap))
             return cap;
-        return ReferenceEquals(Volatile.Read(ref _materializedType), typeof(T)) ? _materializedCount : 16;
+        return ReferenceEquals(Volatile.Read(ref _materializedType), typeof(T))
+            ? _materializedCount
+            : MinCapacityHint;
     }
 
-    /// <summary>记录物化行数（上界内 hint；小结果集不记）。同值不写，避免重复读同规模
-    /// 结果集时每次一条字典写锁。内联槽路径零分配：先写值再发布类型，读侧先读类型。</summary>
+    /// <summary>记录物化行数并按需上调/下调容量提示（上界内 hint）。同值不写，避免同规模
+    /// 重复查询每次付一条字典写。内联槽路径零分配：先写值再发布类型，读侧先读类型。
+    /// <para>下调规则见 <see cref="NextCapacityHint"/>；首次记录时与默认取值（16）相同的规模
+    /// 不占内联槽，保持「小查询零写入」的既有成本。</para></summary>
     internal void RecordMaterializedCount<T>(int count) where T : class, new()
     {
-        int recorded = Math.Min(count, SqlLimits.MaxMaterializedCapacityHint);
-        if (recorded <= 16)
-            return;
+        int target = Math.Clamp(count, MinCapacityHint, SqlLimits.MaxMaterializedCapacityHint);
         Type type = typeof(T);
 
         System.Collections.Concurrent.ConcurrentDictionary<Type, int>? dict = _materializedCapacity;
         if (dict is not null)
         {
-            if (!dict.TryGetValue(type, out int previous) || previous != recorded)
-                dict[type] = recorded;
+            int previous = dict.TryGetValue(type, out int stored) ? stored : MinCapacityHint;
+            int next = NextCapacityHint(previous, target);
+            if (next != previous)
+                dict[type] = next;
             return;
         }
 
         Type? inlineType = Volatile.Read(ref _materializedType);
-        if (inlineType is null || ReferenceEquals(inlineType, type))
+        if (inlineType is null)
         {
-            _materializedCount = recorded;
+            if (target == MinCapacityHint)
+                return;
+            _materializedCount = target;
             Volatile.Write(ref _materializedType, type);
+            return;
+        }
+        if (ReferenceEquals(inlineType, type))
+        {
+            int next = NextCapacityHint(_materializedCount, target);
+            if (next != _materializedCount)
+                _materializedCount = next;
             return;
         }
 
@@ -551,7 +587,7 @@ internal sealed class SessionOperationState
         int inlineCount = _materializedCount;
         var created = new System.Collections.Concurrent.ConcurrentDictionary<Type, int>
         {
-            [type] = recorded,
+            [type] = target,
             [inlineType] = inlineCount
         };
         Interlocked.CompareExchange(ref _materializedType, null, inlineType);
@@ -559,7 +595,7 @@ internal sealed class SessionOperationState
             Interlocked.CompareExchange(ref _materializedCapacity, created, null) ?? created;
         if (!ReferenceEquals(live, created))
         {
-            live[type] = recorded;
+            live[type] = target;
             live.TryAdd(inlineType, inlineCount);
         }
     }
