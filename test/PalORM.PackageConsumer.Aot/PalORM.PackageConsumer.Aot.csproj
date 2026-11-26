@@ -13,8 +13,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="PalORM.Core" Version="7.0.0" />
-    <PackageReference Include="PalORM.Sqlite" Version="7.0.0" />
-    <PackageReference Include="PalORM.SourceGen" Version="7.0.0" PrivateAssets="all" />
+    <PackageReference Include="PalORM.Core" Version="7.1.0" />
+    <PackageReference Include="PalORM.Sqlite" Version="7.1.0" />
+    <PackageReference Include="PalORM.SourceGen" Version="7.1.0" PrivateAssets="all" />
   </ItemGroup>
 </Project>
